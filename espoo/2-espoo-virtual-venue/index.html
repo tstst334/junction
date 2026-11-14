@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Espoo 3D Spatial Virtual Venue &amp; Zoom Hybrid Stage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Fullscreen 3D Scene Canvas -->
+  <div id="three-container"></div>
+  <!-- Projected Floating Nameplates & Room Signs -->
+  <div id="labels-layer"></div>
+
+  <!-- ==================== TOP HUD BAR ==================== -->
+  <header class="fixed top-3 left-3 right-3 z-30 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+    <!-- Left: Event Brand & Current Room -->
+    <div class="hud-glass rounded-2xl px-3.5 py-2 flex items-center gap-3 pointer-events-auto">
+      <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-500/30">
+        <i data-lucide="building" class="w-4 h-4 text-white"></i>
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+            <span class="w-1.5 h-1.5 rounded-full bg-rose-400 pulse-dot"></span>
+            LIVE
+          </span>
+          <h1 id="hud-event-title" class="text-xs sm:text-sm font-bold text-white truncate max-w-[230px] sm:max-w-xs">
+            Espoo Energy &amp; DeepTech Summit
+          </h1>
+        </div>
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-300 mt-0.5">
+          <i data-lucide="map-pin" class="w-3 h-3 text-sky-400"></i>
+          <span>Location:</span>
+          <strong id="hud-current-room" class="text-sky-300">Central Atrium &amp; Networking Hub</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- Center: Mode Switcher -->
+    <div class="hud-glass rounded-2xl p-1 flex items-center gap-1 pointer-events-auto">
+      <button id="mode-walk-btn" class="mode-btn active inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-200 border border-transparent transition">
+        <i data-lucide="footprints" class="w-3.5 h-3.5"></i>
+        <span>3D Venue Walk</span>
+      </button>
+      <button id="mode-zoom-btn" class="mode-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-200 border border-transparent hover:bg-slate-800/70 transition">
+        <i data-lucide="video" class="w-3.5 h-3.5"></i>
+        <span>Zoom Keynote Stage</span>
+      </button>
+      <button id="mode-designer-btn" class="mode-btn inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-200 border border-transparent hover:bg-slate-800/70 transition">
+        <i data-lucide="sliders-horizontal" class="w-3.5 h-3.5"></i>
+        <span>Organizer Designer</span>
+      </button>
+    </div>
+
+    <!-- Right: Back to Radar & Controls Help -->
+    <div class="hud-glass rounded-2xl px-3 py-2 hidden xl:flex items-center gap-3 text-[11px] text-slate-300 pointer-events-auto">
+      <span><kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 text-white font-mono">WASD</kbd> / Click Floor to Walk</span>
+      <span>•</span>
+      <span>Drag Mouse to Orbit · Scroll Zoom</span>
+      <a href="../1-espoo-talent-radar/index.html" target="_blank" rel="noopener" class="ml-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 font-semibold border border-slate-700 transition">
+        Talent Radar ↗
+      </a>
+    </div>
+  </header>
+
+  <!-- Organizer Broadcast Call-to-Room Banner -->
+  <div id="organizer-broadcast-banner" class="fixed top-20 left-1/2 -translate-x-1/2 z-30 hidden max-w-xl w-[92%] hud-glass rounded-2xl px-4 py-3 border border-amber-400/50 bg-amber-950/70 shadow-2xl">
+    <div class="flex items-center justify-between gap-3">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
+          <i data-lucide="megaphone" class="w-4 h-4 text-amber-300"></i>
+        </div>
+        <div>
+          <div class="text-[10px] font-bold uppercase tracking-wider text-amber-300">Organizer Announcement · Follow Glowing Path</div>
+          <div id="broadcast-message-text" class="text-xs font-semibold text-white">Keynote starting in Main Auditorium!</div>
+        </div>
+      </div>
+      <div class="flex items-center gap-1.5 shrink-0">
+        <button id="broadcast-follow-btn" class="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-[11px] font-bold transition">
+          Walk There
+        </button>
+        <button id="broadcast-dismiss-btn" class="p-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10">
+          <i data-lucide="x" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== LEFT HUD: MINIMAP & ROOM DIRECTORY ==================== -->
+  <aside class="fixed left-3 top-20 bottom-20 w-64 z-20 hidden md:flex flex-col gap-2.5 pointer-events-none">
+    <!-- Live 2D Floor Minimap -->
+    <div class="hud-glass rounded-2xl p-3 pointer-events-auto">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <i data-lucide="compass" class="w-3.5 h-3.5 text-sky-400"></i>
+          Building Floorplan
+        </span>
+        <span id="total-attendees-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-semibold">13 Online</span>
+      </div>
+      <canvas id="minimap-canvas" width="230" height="165" class="w-full rounded-xl bg-slate-950/90 border border-slate-800 cursor-pointer" title="Click any room on the minimap to walk there"></canvas>
+      <p class="text-[10px] text-slate-400 mt-1.5">Click minimap or room below to auto-walk.</p>
+    </div>
+
+    <!-- Room Directory -->
+    <div class="hud-glass rounded-2xl p-3 flex-1 overflow-y-auto pointer-events-auto space-y-2">
+      <div class="text-[11px] font-bold uppercase tracking-wider text-slate-300">Rooms &amp; Headcount</div>
+      <div id="room-directory-list" class="space-y-1.5">
+        <!-- Dynamically populated -->
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== RIGHT HUD: SPATIAL PROXIMITY & ROOM INTERACTION ==================== -->
+  <aside class="fixed right-3 top-20 bottom-20 w-80 z-20 flex flex-col gap-2.5 pointer-events-none">
+    <!-- Proximity Video/Audio Pods -->
+    <div class="hud-glass rounded-2xl p-3.5 pointer-events-auto space-y-2.5 max-h-[44%] overflow-y-auto">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-300 flex items-center gap-1.5">
+          <i data-lucide="radio" class="w-3.5 h-3.5"></i>
+          Spatial Proximity (&lt; 4.5m)
+        </span>
+        <span id="proximity-count-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 font-semibold">0 nearby</span>
+      </div>
+      <div id="proximity-pods-list" class="space-y-2">
+        <!-- Dynamically updated as avatar walks -->
+      </div>
+    </div>
+
+    <!-- Active Room Booth & Spatial Chat -->
+    <div class="hud-glass rounded-2xl p-3.5 flex-1 flex flex-col justify-between overflow-hidden pointer-events-auto space-y-2.5">
+      <!-- Room Info / Open Roles -->
+      <div id="room-booth-card" class="space-y-1.5 pb-2.5 border-b border-slate-800/90 shrink-0">
+        <!-- Dynamically updated -->
+      </div>
+
+      <!-- Room Spatial Chat -->
+      <div class="flex-1 flex flex-col min-h-0">
+        <div class="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Room Spatial Chat</div>
+        <div id="spatial-chat-messages" class="flex-1 overflow-y-auto space-y-1.5 pr-1 text-xs">
+          <!-- Populated dynamically -->
+        </div>
+        <form id="spatial-chat-form" class="mt-2 flex items-center gap-1.5">
+          <input id="spatial-chat-input" type="text" placeholder="Say hello to people in this room..." class="flex-1 px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+          <button type="submit" class="p-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white transition">
+            <i data-lucide="send" class="w-3.5 h-3.5"></i>
+          </button>
+        </form>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ==================== BOTTOM HUD BAR: AVATAR, MIC/CAM & QUICK ACTIONS ==================== -->
+  <footer class="fixed bottom-3 left-1/2 -translate-x-1/2 z-30 hud-glass rounded-2xl px-3.5 py-2 flex items-center gap-2.5 pointer-events-auto">
+    <!-- Self Webcam Preview + Avatar Button -->
+    <button id="open-avatar-modal-btn" class="flex items-center gap-2 pr-2.5 border-r border-slate-700/80 hover:opacity-90 transition text-left">
+      <div class="relative w-9 h-9 rounded-xl overflow-hidden bg-slate-800 border border-sky-400/50 flex items-center justify-center shrink-0">
+        <video id="self-webcam-video" autoplay muted playsinline class="w-full h-full object-cover hidden"></video>
+        <div id="self-avatar-fallback" class="w-full h-full flex items-center justify-center bg-gradient-to-br from-sky-500 to-indigo-600 text-xs font-extrabold text-white">YT</div>
+      </div>
+      <div class="hidden sm:block">
+        <div id="self-name-label" class="text-xs font-bold text-white leading-tight">You (Global Talent)</div>
+        <div id="self-badge-label" class="text-[10px] text-emerald-300 font-medium">✓ Verified Match 92%</div>
+      </div>
+      <i data-lucide="chevron-up" class="w-3.5 h-3.5 text-slate-400"></i>
+    </button>
+
+    <!-- Mic / Cam / Wave -->
+    <button id="toggle-mic-btn" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition" title="Toggle Microphone">
+      <i data-lucide="mic-off" class="w-3.5 h-3.5 text-rose-400"></i>
+      <span class="hidden sm:inline">Mic Off</span>
+    </button>
+
+    <button id="toggle-cam-btn" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition" title="Toggle Webcam">
+      <i data-lucide="video-off" class="w-3.5 h-3.5 text-slate-400"></i>
+      <span class="hidden sm:inline">Cam Off</span>
+    </button>
+
+    <button id="wave-reaction-btn" class="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold border border-slate-700 transition" title="Wave / Raise Hand">
+      <span>👋</span>
+      <span class="hidden sm:inline">Wave</span>
+    </button>
+
+    <button id="open-zoom-from-bar-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-md shadow-indigo-600/30 transition">
+      <i data-lucide="tv" class="w-3.5 h-3.5"></i>
+      <span>Open Zoom Stream</span>
+    </button>
+  </footer>
+
+  <!-- ==================== ZOOM KEYNOTE STAGE OVERLAY (FULL MODE) ==================== -->
+  <div id="zoom-stage-overlay" class="fixed inset-0 z-40 hidden bg-slate-950/95 backdrop-blur-xl flex flex-col">
+    <!-- Zoom Header -->
+    <div class="px-5 py-3 border-b border-slate-800 flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40">
+          <span class="w-2 h-2 rounded-full bg-rose-400 pulse-dot"></span>
+          ZOOM LIVESTREAM STAGE
+        </span>
+        <div>
+          <h2 id="zoom-session-title" class="text-sm sm:text-base font-bold text-white">
+            Keynote: Sub-Second Nordic Grid Stability &amp; Green Hydrogen Co-Optimization
+          </h2>
+          <p id="zoom-session-speakers" class="text-xs text-slate-400">Main Auditorium · Speakers: Chief Grid Architect (Fortum) &amp; Principal Scientist (VTT)</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="zoom-minimize-pip-btn" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition">
+          <i data-lucide="picture-in-picture-2" class="w-4 h-4"></i>
+          <span>Minimize to PiP &amp; Walk Venue</span>
+        </button>
+        <button id="zoom-close-btn" class="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition">
+          Exit Stage
+        </button>
+      </div>
+    </div>
+
+    <!-- Zoom Main Content -->
+    <div class="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 min-h-0">
+      <!-- Shared Slide Deck + Speaker Feed -->
+      <div class="lg:col-span-9 flex flex-col gap-3 min-h-0">
+        <div class="flex-1 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-sky-950/60 border border-slate-700/80 p-6 flex flex-col justify-between relative overflow-hidden">
+          <!-- Simulated Active Slide -->
+          <div class="flex items-center justify-between text-xs text-slate-400">
+            <span class="font-semibold text-sky-400">ESPOO TALENT KEYNOTE DECK</span>
+            <span id="slide-counter-label">Slide 1 / 3</span>
+          </div>
+
+          <div id="zoom-slide-content" class="my-auto py-4 space-y-4 max-w-3xl">
+            <!-- Dynamically updated slides -->
+          </div>
+
+          <div class="flex items-center justify-between pt-3 border-t border-slate-800">
+            <div class="flex items-center gap-2">
+              <button id="prev-slide-btn" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white font-semibold">← Prev Slide</button>
+              <button id="next-slide-btn" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white font-semibold">Next Slide →</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="spawnReaction('👏')" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">👏</button>
+              <button onclick="spawnReaction('🔥')" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">🔥</button>
+              <button onclick="spawnReaction('💡')" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">💡</button>
+              <button onclick="spawnReaction('🚀')" class="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm">🚀</button>
+            </div>
+          </div>
+
+          <!-- Speaker Video Inset -->
+          <div class="hidden sm:flex flex-col justify-between w-52 h-36 rounded-xl bg-slate-950/95 border border-sky-400/40 p-3 absolute bottom-16 right-5 shadow-2xl">
+            <div class="flex items-center justify-between text-[10px]">
+              <span class="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">SPEAKING</span>
+              <i data-lucide="mic" class="w-3 h-3 text-emerald-400"></i>
+            </div>
+            <div class="w-12 h-12 rounded-full bg-gradient-to-br from-amber-400 to-orange-600 mx-auto flex items-center justify-center text-white font-extrabold text-base shadow-lg">AK</div>
+            <div class="text-center">
+              <div class="text-xs font-bold text-white">Antti Koskinen</div>
+              <div class="text-[10px] text-slate-400">Chief Grid Architect · Fortum</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Participant Video Strip -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 h-28 shrink-0">
+          <div class="rounded-xl bg-slate-900 border border-slate-800 p-2.5 flex flex-col justify-between">
+            <span class="text-[10px] text-sky-400 font-semibold">VTT Panelist</span>
+            <div class="text-xs font-bold text-white">Dr. Maria Heiskanen</div>
+          </div>
+          <div class="rounded-xl bg-slate-900 border border-slate-800 p-2.5 flex flex-col justify-between">
+            <span class="text-[10px] text-emerald-400 font-semibold">Neste Hiring Lead</span>
+            <div class="text-xs font-bold text-white">Joonas Rantanen</div>
+          </div>
+          <div class="rounded-xl bg-slate-900 border border-slate-800 p-2.5 flex flex-col justify-between">
+            <span class="text-[10px] text-purple-400 font-semibold">IQM Guest</span>
+            <div class="text-xs font-bold text-white">Dr. Kenji Takahashi</div>
+          </div>
+          <div class="rounded-xl bg-slate-900 border border-sky-500/40 p-2.5 flex flex-col justify-between">
+            <span class="text-[10px] text-amber-300 font-semibold">You (Verified 92%)</span>
+            <div id="zoom-self-tile-name" class="text-xs font-bold text-white">Global Talent</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Live Stage Q&A Sidebar -->
+      <div class="lg:col-span-3 rounded-2xl bg-slate-900/90 border border-slate-800 p-4 flex flex-col min-h-0">
+        <div class="text-xs font-bold uppercase tracking-wider text-sky-400 pb-2 border-b border-slate-800">
+          Live Keynote Q&amp;A
+        </div>
+        <div id="zoom-qa-list" class="flex-1 overflow-y-auto space-y-2.5 py-3 text-xs">
+          <div class="p-2.5 rounded-xl bg-slate-800/70">
+            <div class="font-bold text-sky-300">Dr. Mikko Väisänen · Zurich</div>
+            <p class="text-slate-200 mt-0.5">Are Fortum's 2027 BESS specs requiring black-start grid-forming compliance across all new Espoo substations?</p>
+          </div>
+          <div class="p-2.5 rounded-xl bg-slate-800/70">
+            <div class="font-bold text-emerald-300">Sofia Lindqvist · KTH</div>
+            <p class="text-slate-200 mt-0.5">Which EMT simulation tools does the Keilaniemi flexibility team use day-to-day (PSCAD vs Opal-RT)?</p>
+          </div>
+        </div>
+        <form id="zoom-qa-form" class="pt-2 border-t border-slate-800 flex gap-1.5">
+          <input id="zoom-qa-input" type="text" placeholder="Ask keynote speaker..." class="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-400" />
+          <button type="submit" class="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold">Ask</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== FLOATING PICTURE-IN-PICTURE (PiP) ZOOM STREAM ==================== -->
+  <div id="zoom-pip-dock" class="fixed bottom-20 left-3 md:left-72 z-30 hidden w-72 hud-glass rounded-2xl overflow-hidden border border-sky-400/50 shadow-2xl">
+    <div id="pip-drag-handle" class="px-3 py-2 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between cursor-move">
+      <div class="flex items-center gap-1.5">
+        <span class="w-2 h-2 rounded-full bg-rose-500 pulse-dot"></span>
+        <span class="text-[11px] font-bold text-white">Zoom Keynote · PiP</span>
+      </div>
+      <div class="flex items-center gap-1">
+        <button id="pip-expand-btn" class="p-1 rounded hover:bg-slate-800 text-sky-300" title="Expand Full Zoom Stage">
+          <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+        </button>
+        <button id="pip-close-btn" class="p-1 rounded hover:bg-slate-800 text-slate-400" title="Close PiP">
+          <i data-lucide="x" class="w-3.5 h-3.5"></i>
+        </button>
+      </div>
+    </div>
+    <div class="p-3 bg-gradient-to-br from-slate-950 to-sky-950/70 space-y-2">
+      <div class="flex items-center gap-2.5">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center text-white font-bold text-xs shrink-0">AK</div>
+        <div class="min-w-0">
+          <div id="pip-slide-title" class="text-xs font-bold text-white truncate">Nordic Grid Stability Keynote</div>
+          <div class="text-[10px] text-emerald-300">Antti Koskinen (Fortum) speaking live</div>
+        </div>
+      </div>
+      <div class="text-[10px] text-slate-300 bg-black/30 rounded-lg px-2 py-1">
+        Streaming audio while you walk &amp; network in 3D rooms.
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== ORGANIZER ROOM DESIGNER DRAWER ==================== -->
+  <div id="designer-drawer" class="fixed top-20 left-3 bottom-20 w-80 sm:w-96 z-30 hidden hud-glass rounded-2xl p-4 overflow-y-auto space-y-4 border border-indigo-400/40 shadow-2xl">
+    <div class="flex items-center justify-between pb-2 border-b border-slate-800">
+      <div>
+        <h2 class="text-sm font-extrabold text-white flex items-center gap-1.5">
+          <i data-lucide="wand-2" class="w-4 h-4 text-indigo-400"></i>
+          Organizer Venue &amp; Room Designer
+        </h2>
+        <p class="text-[11px] text-slate-400">Customize rooms, load templates &amp; guide attendees</p>
+      </div>
+      <button id="close-designer-btn" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+
+    <!-- Pre-Designed Venue Templates -->
+    <div class="space-y-2">
+      <label class="text-[11px] font-bold uppercase tracking-wider text-sky-300">1. Select Pre-Designed Venue Layout</label>
+      <div class="grid grid-cols-1 gap-1.5">
+        <button data-preset="energy" class="preset-btn text-left px-3 py-2 rounded-xl bg-sky-500/15 border border-sky-400/40 text-xs text-white font-semibold transition">
+          ⚡ Espoo Energy &amp; CleanTech Summit
+        </button>
+        <button data-preset="quantum" class="preset-btn text-left px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-700 hover:border-slate-500 text-xs text-slate-200 font-semibold transition">
+          ⚛️ Otaniemi Quantum &amp; DeepTech Expo
+        </button>
+        <button data-preset="roundtable" class="preset-btn text-left px-3 py-2 rounded-xl bg-slate-900/80 border border-slate-700 hover:border-slate-500 text-xs text-slate-200 font-semibold transition">
+          🤝 Executive Senior Talent Roundtable
+        </button>
+      </div>
+    </div>
+
+    <!-- Customize Individual Room -->
+    <div class="space-y-2.5 pt-2 border-t border-slate-800">
+      <label class="text-[11px] font-bold uppercase tracking-wider text-sky-300">2. Customize Room Properties</label>
+      <select id="designer-room-select" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-400"></select>
+
+      <div>
+        <label class="text-[11px] text-slate-400 block mb-1">Room Display Name</label>
+        <input id="designer-room-name" type="text" class="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white" />
+      </div>
+
+      <div>
+        <label class="text-[11px] text-slate-400 block mb-1">Host / Sponsor Company</label>
+        <input id="designer-room-sponsor" type="text" class="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white" />
+      </div>
+
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[11px] text-slate-400 block mb-1">Access Rule</label>
+          <select id="designer-room-access" class="w-full px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white">
+            <option value="Open to All">Open to All</option>
+            <option value="Verified Match >80% Only">Verified Match &gt;80%</option>
+            <option value="1-on-1 Invite">1-on-1 Invite</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-[11px] text-slate-400 block mb-1">Room Accent Color</label>
+          <input id="designer-room-color" type="color" value="#0ea5e9" class="w-full h-8 rounded-xl bg-slate-900 border border-slate-700 cursor-pointer" />
+        </div>
+      </div>
+
+      <button id="apply-room-edits-btn" class="w-full py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition">
+        Apply Room Design Changes
+      </button>
+    </div>
+
+    <!-- Place 3D Objects in Room -->
+    <div class="space-y-2 pt-2 border-t border-slate-800">
+      <label class="text-[11px] font-bold uppercase tracking-wider text-sky-300">3. Place 3D Furniture &amp; Booths</label>
+      <div class="grid grid-cols-2 gap-1.5">
+        <button data-prop="table" class="add-prop-btn px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-200">+ Conference Table</button>
+        <button data-prop="booth" class="add-prop-btn px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-200">+ Sponsor Booth</button>
+        <button data-prop="screen" class="add-prop-btn px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-200">+ Keynote Screen</button>
+        <button data-prop="sofa" class="add-prop-btn px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-200">+ Lounge Sofa</button>
+        <button data-prop="kiosk" class="add-prop-btn col-span-2 px-2.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-[11px] font-semibold text-slate-200">+ Interactive Job Info Kiosk</button>
+      </div>
+    </div>
+
+    <!-- Broadcast Call-to-Room -->
+    <div class="space-y-2 pt-2 border-t border-slate-800">
+      <label class="text-[11px] font-bold uppercase tracking-wider text-amber-300">4. Direct Participants to Room</label>
+      <input id="broadcast-custom-msg" type="text" placeholder="e.g., Fortum &amp; Neste Q&amp;A starting in CleanTech Lounge!" class="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white" />
+      <button id="trigger-broadcast-btn" class="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold transition flex items-center justify-center gap-1.5">
+        <i data-lucide="megaphone" class="w-4 h-4"></i>
+        <span>Broadcast Call &amp; Draw 3D Floor Path</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ==================== AVATAR CUSTOMIZER MODAL ==================== -->
+  <div id="avatar-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4">
+    <div class="hud-glass rounded-2xl max-w-md w-full p-5 space-y-4 border border-slate-700">
+      <div class="flex items-center justify-between">
+        <h3 class="text-base font-bold text-white">Customize Your Avatar &amp; Badge</h3>
+        <button id="close-avatar-modal-btn" class="p-1 rounded-lg text-slate-400 hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs text-slate-300 block mb-1">Display Name</label>
+          <input id="avatar-name-input" type="text" value="You (Global Talent)" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-300 block mb-1">Role Tag</label>
+          <select id="avatar-role-select" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white">
+            <option value="Global Talent">Global Talent</option>
+            <option value="Espoo Employer">Espoo Employer</option>
+            <option value="Speaker">Keynote Speaker</option>
+            <option value="Organizer">City of Espoo Organizer</option>
+          </select>
+        </div>
+        <div>
+          <label class="text-xs text-slate-300 block mb-1">Verified Skill / Match Badge</label>
+          <input id="avatar-badge-input" type="text" value="✓ Verified Match 92% · Grid &amp; AI" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white" />
+        </div>
+        <div>
+          <label class="text-xs text-slate-300 block mb-1">Avatar Outfit Color</label>
+          <input id="avatar-color-input" type="color" value="#38bdf8" class="w-full h-9 rounded-xl bg-slate-900 border border-slate-700 cursor-pointer" />
+        </div>
+      </div>
+      <button id="save-avatar-btn" class="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition">
+        Update 3D Avatar
+      </button>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="venue-toast" class="fixed top-20 right-4 z-50 hidden px-4 py-2.5 rounded-xl hud-glass border border-sky-400/50 text-xs font-semibold text-white shadow-xl"></div>
+
+  <script src="venue3d.js"></script>
+</body>
+</html>
+

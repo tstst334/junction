@@ -481,6 +481,7 @@ body {
   background: rgba(0, 0, 0, 0.65);
   color: var(--text-primary);
   font-size: 13px;
+  touch-action: manipulation;
 }
 
 .neural-composer-input:focus {
@@ -488,18 +489,38 @@ body {
   border-color: transparent;
 }
 
-.neural-commit-btn {
-  padding: 5px 10px;
+.neural-commit-btn,
+.neural-action-btn {
+  padding: 5px 8px;
   border-radius: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.neural-commit-btn {
   border: 1px solid rgba(107, 241, 120, 0.55);
   background: rgba(107, 241, 120, 0.2);
   color: var(--accent-mint);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
 }
 
-.neural-commit-btn:disabled {
+.neural-action-btn {
+  border: 1px solid var(--border-subtle);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.neural-action-btn.is-active,
+.neural-action-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  border-color: var(--accent-cyan);
+  background: rgba(69, 230, 255, 0.2);
+}
+
+.neural-commit-btn:disabled,
+.neural-action-btn:disabled {
   opacity: 0.38;
   cursor: default;
 }

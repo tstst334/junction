@@ -21,9 +21,10 @@ interface DocumentCanvasProps {
   mode: InteractionMode;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onSelectLine: (lineIndex: number, charIndex?: number) => void;
-  onPointerDrawStart: (x: number, y: number) => void;
-  onPointerDrawMove: (x: number, y: number) => void;
-  onPointerDrawEnd: () => void;
+  onSheetPointerDown: (x: number, y: number) => void;
+  onSheetPointerMove: (x: number, y: number) => void;
+  onSheetPointerUp: () => void;
+  onSheetPointerCancel: () => void;
 }
 
 function buildSmoothSvgPath(points: InkPoint[]): string {
@@ -64,13 +65,14 @@ export function DocumentCanvas({
   mode,
   scrollRef,
   onSelectLine,
-  onPointerDrawStart,
-  onPointerDrawMove,
-  onPointerDrawEnd,
+  onSheetPointerDown,
+  onSheetPointerMove,
+  onSheetPointerUp,
+  onSheetPointerCancel,
 }: DocumentCanvasProps) {
   const pageSheetRef = useRef<HTMLDivElement | null>(null);
   const lineRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const pointerDraggingRef = useRef(false);
+  const pointerDownRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
 
   // Scroll the active cursor line into view smoothly whenever lineIndex changes.
@@ -99,31 +101,31 @@ export function DocumentCanvas({
     if (!sheet) return;
 
     const coords = toLogicalCoords(event.clientX, event.clientY);
-    pointerDraggingRef.current = true;
+    pointerDownRef.current = true;
     dragStartRef.current = { x: coords.x, y: coords.y, moved: false };
     try {
       sheet.setPointerCapture(event.pointerId);
     } catch {
       // Synthetic pointer events in tests might not support capture
     }
-    onPointerDrawStart(coords.x, coords.y);
+    onSheetPointerDown(coords.x, coords.y);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointerDraggingRef.current) return;
+    if (!pointerDownRef.current) return;
     const coords = toLogicalCoords(event.clientX, event.clientY);
     if (dragStartRef.current) {
       const dist = Math.hypot(coords.x - dragStartRef.current.x, coords.y - dragStartRef.current.y);
-      if (dist > 3) {
+      if (dist > 8) {
         dragStartRef.current.moved = true;
       }
     }
-    onPointerDrawMove(coords.x, coords.y);
+    onSheetPointerMove(coords.x, coords.y);
   };
 
   const handlePointerFinish = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (!pointerDraggingRef.current) return;
-    pointerDraggingRef.current = false;
+    if (!pointerDownRef.current) return;
+    pointerDownRef.current = false;
     const sheet = pageSheetRef.current;
     if (sheet) {
       try {
@@ -132,7 +134,11 @@ export function DocumentCanvas({
         // Ignore if not captured
       }
     }
-    onPointerDrawEnd();
+    if (event.type === 'pointercancel') {
+      onSheetPointerCancel();
+    } else {
+      onSheetPointerUp();
+    }
   };
 
   const renderBlockContent = (block: DocBlock, index: number) => {

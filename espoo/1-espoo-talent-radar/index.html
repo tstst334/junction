@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Espoo TalentPulse AI — Hiring Radar, Event Strategist & Anti-Bluff Gatekeeper</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="antialiased selection:bg-sky-500/30 selection:text-sky-100">
+
+  <!-- Top Navigation & Gemini API Bar -->
+  <header class="sticky top-0 z-40 border-b border-slate-800/80 bg-slate-950/85 backdrop-blur-xl no-print">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <!-- Brand -->
+        <div class="flex items-center gap-3.5">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-blue-700 flex items-center justify-center shadow-lg shadow-sky-500/25">
+            <i data-lucide="radar" class="w-5 h-5 text-white"></i>
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-400/30">City of Espoo × Junction</span>
+              <span id="ai-mode-badge" class="text-xs font-medium px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-400/30">Demo Intelligence Mode</span>
+            </div>
+            <h1 class="text-lg sm:text-xl font-bold text-white tracking-tight mt-0.5">
+              TalentPulse AI <span class="text-slate-400 font-normal text-sm hidden sm:inline">— Knowledge-Work Hiring Radar & Event Gatekeeper</span>
+            </h1>
+          </div>
+        </div>
+
+        <!-- Gemini API Config & Quick Link to 3D Venue -->
+        <div class="flex flex-wrap items-center gap-2.5">
+          <button id="open-api-modal-btn" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700/80 transition">
+            <span id="api-status-dot" class="w-2 h-2 rounded-full bg-amber-400"></span>
+            <i data-lucide="key-round" class="w-3.5 h-3.5 text-sky-400"></i>
+            <span id="api-btn-label">Configure Gemini API Key</span>
+          </button>
+          <a href="../2-espoo-virtual-venue/index.html" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-indigo-600 to-sky-600 hover:from-indigo-500 hover:to-sky-500 text-white shadow-md shadow-sky-600/25 transition">
+            <i data-lucide="box" class="w-3.5 h-3.5"></i>
+            <span>Open 3D Virtual Venue</span>
+            <i data-lucide="external-link" class="w-3 h-3 opacity-80"></i>
+          </a>
+        </div>
+      </div>
+
+      <!-- Primary Tabs -->
+      <div class="flex flex-wrap items-center gap-2 mt-3.5 pt-3 border-t border-slate-800/70">
+        <button data-tab="radar-tab" class="tab-btn active inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border border-slate-700/70 bg-slate-900/70 text-slate-300 hover:text-white">
+          <i data-lucide="activity" class="w-4 h-4"></i>
+          <span>1. Espoo Hiring Radar</span>
+          <span class="text-xs px-1.5 py-0.5 rounded-md bg-white/10" id="tab-employer-count">8</span>
+        </button>
+        <button data-tab="event-generator-tab" class="tab-btn inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border border-slate-700/70 bg-slate-900/70 text-slate-300 hover:text-white">
+          <i data-lucide="sparkles" class="w-4 h-4"></i>
+          <span>2. Event &amp; Global Outreach Architect</span>
+        </button>
+        <button data-tab="applicant-vetting-tab" class="tab-btn inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border border-slate-700/70 bg-slate-900/70 text-slate-300 hover:text-white">
+          <i data-lucide="shield-check" class="w-4 h-4"></i>
+          <span>3. Anti-Bluff Applicant Gatekeeper</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- ==================== TAB 1: ESPOO EMPLOYER HIRING RADAR ==================== -->
+    <section id="radar-tab" class="tab-panel space-y-6">
+      <!-- KPI Row -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="glass-card rounded-2xl p-4">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Tracked Espoo Employers</span>
+            <i data-lucide="building-2" class="w-4 h-4 text-sky-400"></i>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="kpi-employers" class="text-2xl font-bold text-white">8</span>
+            <span class="text-xs text-emerald-400 font-medium">Otaniemi · Keilaniemi · Karakaari</span>
+          </div>
+        </div>
+
+        <div class="glass-card rounded-2xl p-4">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Open Knowledge-Work Roles</span>
+            <i data-lucide="briefcase" class="w-4 h-4 text-cyan-400"></i>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="kpi-open-roles" class="text-2xl font-bold text-white">218</span>
+            <span class="text-xs text-cyan-300 font-medium">+24% vs last 30 days</span>
+          </div>
+        </div>
+
+        <div class="glass-card rounded-2xl p-4">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Senior vs Entry Split</span>
+            <i data-lucide="git-branch" class="w-4 h-4 text-indigo-400"></i>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="kpi-seniority-split" class="text-2xl font-bold text-white">68% / 32%</span>
+            <span class="text-xs text-slate-400">Senior · Junior/Thesis</span>
+          </div>
+        </div>
+
+        <div class="glass-card rounded-2xl p-4">
+          <div class="flex items-center justify-between text-slate-400 text-xs font-medium">
+            <span>Top Triggered Event Surge</span>
+            <i data-lucide="flame" class="w-4 h-4 text-orange-400"></i>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="kpi-top-cluster" class="text-lg font-bold text-orange-300 truncate">Energy Transformation</span>
+          </div>
+          <p class="text-xs text-slate-400 mt-0.5">Fortum + Neste + VTT surge detected</p>
+        </div>
+      </div>
+
+      <!-- Charts & Live Scanner Row -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <!-- Hiring Surge Velocity Chart -->
+        <div class="lg:col-span-2 glass-card rounded-2xl p-5 flex flex-col justify-between">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 class="text-base font-bold text-white flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 radar-ping"></span>
+                Espoo Hiring Velocity &amp; Seniority Demand by Cluster
+              </h2>
+              <p class="text-xs text-slate-400 mt-0.5">Automated weekly crawl across career portals (Workday, Greenhouse, Lever, SmartRecruiters)</p>
+            </div>
+            <span class="text-xs px-2.5 py-1 rounded-lg bg-slate-800/80 text-slate-300 border border-slate-700">Updated: Today 17:45 EET</span>
+          </div>
+          <div class="h-64 w-full">
+            <canvas id="hiring-velocity-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Live Career Page / Text Scanner -->
+        <div class="glass-card rounded-2xl p-5 flex flex-col justify-between space-y-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <i data-lucide="scan-search" class="w-4 h-4 text-sky-400"></i>
+              Live Career Page / Job Feed Scanner
+            </h2>
+            <p class="text-xs text-slate-400 mt-1">
+              Paste a company's career page URL, job list snippet, or press release. Gemini extracts open role counts, seniority ratio, and adds it directly to Espoo's radar.
+            </p>
+          </div>
+
+          <div class="space-y-2.5">
+            <input id="scan-company-name" type="text" placeholder="Company name (e.g., Kempower / ReOrbit / Varjo)" class="w-full px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-700/80 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+            <textarea id="scan-raw-input" rows="4" placeholder="Paste career page text, URL, or list of open roles (e.g. 'Seeking 4 Senior Battery BMS Engineers, 2 Power Electronics Leads, 3 Master Thesis students in Espoo/Otaniemi...')" class="w-full px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-400"></textarea>
+            <div class="flex flex-wrap gap-2">
+              <button id="run-live-scan-btn" class="flex-1 inline-flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold transition shadow-md shadow-sky-600/20">
+                <i data-lucide="zap" class="w-3.5 h-3.5"></i>
+                <span>Scan &amp; Add to Radar</span>
+              </button>
+              <button id="load-sample-scan-btn" class="px-3 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition">
+                Sample Feed
+              </button>
+            </div>
+            <div id="scan-status-msg" class="text-xs text-sky-300 hidden"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Filters & Employer Grid -->
+      <div class="space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div class="flex flex-wrap items-center gap-2" id="sector-filter-bar">
+            <button data-sector="All" class="sector-chip px-3 py-1.5 rounded-xl text-xs font-semibold bg-sky-500/20 text-sky-200 border border-sky-400/40">All Sectors</button>
+            <button data-sector="Energy Transformation" class="sector-chip px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900/80 text-slate-300 border border-slate-700 hover:border-slate-500">⚡ Energy Transformation</button>
+            <button data-sector="Quantum & Space DeepTech" class="sector-chip px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900/80 text-slate-300 border border-slate-700 hover:border-slate-500">⚛️ Quantum &amp; Space DeepTech</button>
+            <button data-sector="6G & Embedded Systems" class="sector-chip px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900/80 text-slate-300 border border-slate-700 hover:border-slate-500">📡 6G &amp; Embedded Systems</button>
+            <button data-sector="Smart Urban & CleanTech AI" class="sector-chip px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-900/80 text-slate-300 border border-slate-700 hover:border-slate-500">🏙️ Smart Urban &amp; AI</button>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <label for="seniority-filter" class="text-xs text-slate-400">Seniority Focus:</label>
+            <select id="seniority-filter" class="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:border-sky-400">
+              <option value="all">All Roles</option>
+              <option value="senior-heavy">Senior / Lead Heavy (≥60%)</option>
+              <option value="entry-heavy">Entry / Thesis Friendly (≥35%)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Employer Cards Container -->
+        <div id="employer-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 2: AI EVENT & GLOBAL OUTREACH ARCHITECT ==================== -->
+    <section id="event-generator-tab" class="tab-panel hidden space-y-6">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Left Config Panel -->
+        <div class="lg:col-span-4 space-y-4">
+          <div class="glass-card rounded-2xl p-5 space-y-4">
+            <div>
+              <h2 class="text-base font-bold text-white flex items-center gap-2">
+                <i data-lucide="wand-2" class="w-4 h-4 text-sky-400"></i>
+                Select Demand Surge Cluster
+              </h2>
+              <p class="text-xs text-slate-400 mt-1">
+                Pick an Espoo hiring cluster or custom employer combination. Gemini generates an authoritative technical event + dual-track outreach plan (Universities for entry roles vs. Global specialist channels for senior roles).
+              </p>
+            </div>
+
+            <div class="space-y-2" id="cluster-presets">
+              <button data-cluster="Energy Transformation" class="cluster-preset-btn w-full text-left p-3 rounded-xl border border-sky-400/50 bg-sky-500/15 transition">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-bold text-white">⚡ Energy Transformation Cluster</span>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-orange-500/20 text-orange-300 font-semibold">Surge +34%</span>
+                </div>
+                <p class="text-xs text-slate-300 mt-1">Fortum · Neste · VTT (69 open roles)</p>
+              </button>
+
+              <button data-cluster="Quantum & Space DeepTech" class="cluster-preset-btn w-full text-left p-3 rounded-xl border border-slate-700/80 bg-slate-900/70 hover:border-slate-500 transition">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-bold text-white">⚛️ Quantum &amp; Space DeepTech</span>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 font-semibold">Senior-Heavy</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">IQM Quantum · ICEYE (56 open roles)</p>
+              </button>
+
+              <button data-cluster="6G & Embedded Systems" class="cluster-preset-btn w-full text-left p-3 rounded-xl border border-slate-700/80 bg-slate-900/70 hover:border-slate-500 transition">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-bold text-white">📡 6G &amp; Embedded Systems</span>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 font-semibold">Balanced</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">Nokia · Qt Group (64 open roles)</p>
+              </button>
+
+              <button data-cluster="Smart Urban & CleanTech AI" class="cluster-preset-btn w-full text-left p-3 rounded-xl border border-slate-700/80 bg-slate-900/70 hover:border-slate-500 transition">
+                <div class="flex items-center justify-between">
+                  <span class="text-sm font-bold text-white">🏙️ Smart Urban Flow &amp; Edge AI</span>
+                  <span class="text-xs px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold">Entry + Senior</span>
+                </div>
+                <p class="text-xs text-slate-400 mt-1">Kone · VTT (29 open roles)</p>
+              </button>
+            </div>
+
+            <div class="pt-2 border-t border-slate-800 space-y-3">
+              <div>
+                <label class="text-xs font-semibold text-slate-300 block mb-1">Target Seniority Emphasis</label>
+                <select id="event-seniority-mode" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-sky-400">
+                  <option value="auto">Auto-Detect from Employer Ratio</option>
+                  <option value="senior">Senior / Principal / R&amp;D Leads (Global Sourcing)</option>
+                  <option value="entry">Entry / Graduate / Thesis (University Pipeline)</option>
+                  <option value="hybrid">Dual-Track (Senior Symposium + Thesis Clinic)</option>
+                </select>
+              </div>
+              <div>
+                <label class="text-xs font-semibold text-slate-300 block mb-1">Optional Custom Focus Note</label>
+                <input id="event-custom-note" type="text" placeholder="e.g., Focus on grid-forming inverters & relocation to Espoo" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+              </div>
+
+              <button id="generate-event-btn" class="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-sm font-bold shadow-lg shadow-sky-600/25 transition">
+                <i data-lucide="sparkles" class="w-4 h-4"></i>
+                <span>Generate Event &amp; Outreach Blueprint</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right Blueprint Output -->
+        <div class="lg:col-span-8 space-y-4">
+          <div id="event-blueprint-container" class="glass-card rounded-2xl p-6 space-y-6">
+            <!-- Dynamically rendered -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3: ANTI-BLUFF APPLICANT GATEKEEPER ==================== -->
+    <section id="applicant-vetting-tab" class="tab-panel hidden space-y-6">
+      <div class="glass-card rounded-2xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <i data-lucide="shield-alert" class="w-4 h-4 text-emerald-400"></i>
+            High-Caliber Applicant Gatekeeper &amp; Anti-Bluff Verifier
+          </h2>
+          <p class="text-xs text-slate-400 mt-1 max-w-3xl">
+            Protects the City of Espoo's reputation with employers. Instead of trusting self-reported checkboxes (where candidates may exaggerate), every applicant answers a 3-minute domain micro-challenge generated from the target employers' real engineering bottlenecks. Gemini audits technical depth, proof links, and bluff signals automatically.
+          </p>
+        </div>
+        <div class="flex items-center gap-2 shrink-0">
+          <button id="generate-challenge-btn" class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 text-xs font-semibold transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>New Micro-Challenge</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Micro-Challenge Banner -->
+      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-sky-500 space-y-2">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <span class="text-xs font-bold uppercase tracking-wider text-sky-400">Active Registration Gate — Anti-Bluff Scenario</span>
+          <span id="challenge-event-tag" class="text-xs px-2.5 py-0.5 rounded-full bg-sky-500/15 text-sky-200 border border-sky-400/30">Energy Transformation Summit</span>
+        </div>
+        <p id="active-micro-challenge-text" class="text-sm text-slate-100 leading-relaxed font-medium">
+          "In a Nordic grid with 45% wind penetration and low synchronous inertia, how would you diagnose and mitigate sub-synchronous oscillation between a grid-forming inverter park and an electrolyzer load? Mention one telemetry signal or control parameter you actually inspect."
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <!-- Applicant Queue & Custom Form -->
+        <div class="lg:col-span-5 space-y-4">
+          <div class="glass-card rounded-2xl p-5 space-y-3">
+            <div class="flex items-center justify-between">
+              <h3 class="text-sm font-bold text-white">Sample Registrations Queue</h3>
+              <span class="text-xs text-slate-400">Click to audit</span>
+            </div>
+            <div id="applicant-queue-list" class="space-y-2.5">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+
+          <div class="glass-card rounded-2xl p-5 space-y-3">
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i data-lucide="user-plus" class="w-4 h-4 text-sky-400"></i>
+              Test Custom Candidate Application
+            </h3>
+            <input id="custom-cand-name" type="text" placeholder="Full Name (e.g., Dr. Elena Korhonen)" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+            <input id="custom-cand-claim" type="text" placeholder="Self-claimed title &amp; years (e.g., Principal Power Systems Architect, 9 yrs)" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+            <input id="custom-cand-proof" type="text" placeholder="GitHub / Google Scholar / Patent / Portfolio note" class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-400" />
+            <textarea id="custom-cand-answer" rows="4" placeholder="Paste candidate's answer to the 3-minute micro-challenge..." class="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-sky-400"></textarea>
+            <button id="evaluate-custom-cand-btn" class="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition shadow-md shadow-emerald-600/20">
+              <i data-lucide="cpu" class="w-4 h-4"></i>
+              <span>Run Anti-Bluff Verification</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Audit Result Panel -->
+        <div class="lg:col-span-7">
+          <div id="vetting-result-panel" class="glass-card rounded-2xl p-6 space-y-5">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Gemini API Key Configuration Modal -->
+  <div id="api-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+    <div class="glass-card rounded-2xl max-w-lg w-full p-6 space-y-4 border border-slate-700">
+      <div class="flex items-center justify-between">
+        <h3 class="text-lg font-bold text-white flex items-center gap-2">
+          <i data-lucide="sparkles" class="w-5 h-5 text-sky-400"></i>
+          Google Gemini API Configuration
+        </h3>
+        <button id="close-api-modal-btn" class="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+      <p class="text-xs text-slate-300 leading-relaxed">
+        Enter your Gemini API key to run real-time AI career-page extraction, custom event &amp; university/senior outreach generation, and anti-bluff applicant auditing directly from the browser. Your key is saved only in your browser's <code class="text-sky-300">localStorage</code>.
+      </p>
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-300 block mb-1">Gemini API Key</label>
+          <input id="gemini-api-key-input" type="password" placeholder="AIzaSy..." class="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400" />
+        </div>
+        <div>
+          <label class="text-xs font-semibold text-slate-300 block mb-1">Model</label>
+          <select id="gemini-model-select" class="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white focus:outline-none focus:border-sky-400">
+            <option value="gemini-2.5-flash">gemini-2.5-flash (Fast &amp; Cost-Effective — Recommended)</option>
+            <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
+          </select>
+        </div>
+        <div id="api-test-feedback" class="text-xs hidden p-2.5 rounded-xl"></div>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2 pt-2">
+        <button id="clear-api-key-btn" class="px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-300 hover:bg-rose-500/10 border border-rose-500/30 transition">
+          Clear Key (Use Demo Mode)
+        </button>
+        <div class="flex items-center gap-2">
+          <button id="test-api-key-btn" class="px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+            Test Connection
+          </button>
+          <button id="save-api-key-btn" class="px-4 py-2 rounded-xl text-xs font-bold bg-sky-600 hover:bg-sky-500 text-white transition">
+            Save &amp; Enable Live AI
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast-banner" class="fixed bottom-5 right-5 z-50 hidden max-w-sm px-4 py-3 rounded-xl glass-card border border-sky-400/40 text-xs font-medium text-white shadow-2xl"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

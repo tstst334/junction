@@ -189,6 +189,9 @@ export class WristSensorController {
   private latestRaw: Quat | null = null;
   private latestTimestamp = 0;
   private isSimulating = false;
+  private smoothDx = 0;
+  private smoothDy = 0;
+  private hasSmoothSample = false;
   private readonly onReading: (telemetry: WristTelemetry) => void;
   private readonly onStatusChange?: (status: SensorStatus) => void;
 
@@ -251,12 +254,18 @@ export class WristSensorController {
       ];
     }
     this.basis = createPointingBasis(this.latestW3C);
+    this.smoothDx = 0;
+    this.smoothDy = 0;
+    this.hasSmoothSample = false;
     this.emitTelemetry();
     return this.basis;
   }
 
   public clearReference(): void {
     this.basis = null;
+    this.smoothDx = 0;
+    this.smoothDy = 0;
+    this.hasSmoothSample = false;
     this.emitTelemetry();
   }
 
@@ -375,9 +384,27 @@ export class WristSensorController {
   private emitTelemetry(): void {
     const q = this.latestW3C;
     const pointing = q ? pointingDirection(q) : null;
-    const delta = q && this.basis ? projectPointingDelta(q, this.basis) : null;
-    const rollDeg = delta
-      ? Math.round((delta.rollRad * 180) / Math.PI)
+    const rawDelta = q && this.basis ? projectPointingDelta(q, this.basis) : null;
+
+    let smoothedDelta: { dx: number; dy: number } | null = null;
+    if (rawDelta) {
+      if (!this.hasSmoothSample) {
+        this.smoothDx = rawDelta.dx;
+        this.smoothDy = rawDelta.dy;
+        this.hasSmoothSample = true;
+      } else {
+        // Adaptive low-pass filter: strong tremor damping on tiny motions,
+        // responsive tracking on deliberate arm sweeps.
+        const stepDist = Math.hypot(rawDelta.dx - this.smoothDx, rawDelta.dy - this.smoothDy);
+        const alpha = stepDist < 0.015 ? 0.14 : Math.min(0.42, 0.14 + (stepDist - 0.015) * 3.5);
+        this.smoothDx += alpha * (rawDelta.dx - this.smoothDx);
+        this.smoothDy += alpha * (rawDelta.dy - this.smoothDy);
+      }
+      smoothedDelta = { dx: this.smoothDx, dy: this.smoothDy };
+    }
+
+    const rollDeg = rawDelta
+      ? Math.round((rawDelta.rollRad * 180) / Math.PI)
       : q
         ? Math.round((twistAngle(q) * 180) / Math.PI)
         : 0;
@@ -387,7 +414,7 @@ export class WristSensorController {
       rawWFirst: this.latestRaw,
       w3cQuat: q,
       pointing,
-      deltaPointing: delta ? { dx: delta.dx, dy: delta.dy } : null,
+      deltaPointing: smoothedDelta,
       rollDeg,
       timestamp: this.latestTimestamp,
       isSimulating: this.isSimulating,

@@ -118,14 +118,24 @@ export default function App() {
 
   const docRef = useRef(doc);
   docRef.current = doc;
+  const undoStackRef = useRef<DocumentSnapshot[]>([]);
+  undoStackRef.current = undoStack;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const telemetryStatusRef = useRef(telemetry.status);
+  telemetryStatusRef.current = telemetry.status;
   const penPosRef = useRef(penPos);
   penPosRef.current = penPos;
   const activeStrokeRef = useRef<InkStroke | null>(null);
   const drawOriginRef = useRef<{ x: number; y: number }>({ x: 270, y: 160 });
   const lastDrawTickRef = useRef(0);
   const lastHudTickRef = useRef(0);
+  const liveSessionRef = useRef<{
+    lineIndex: number;
+    startCharIndex: number;
+    appliedLength: number;
+    preSessionSnapshot: DocumentSnapshot;
+  } | null>(null);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLInputElement | null>(null);
@@ -134,7 +144,6 @@ export default function App() {
   const sensorRef = useRef<WristSensorController | null>(null);
 
   const currentColor = PEN_COLORS[penColorIdx].hex;
-  const currentWidth = PEN_WIDTHS[penWidthIdx];
   const maxSheetHeight = Math.max(480, doc.blocks.length * 44 + 180);
 
   const showToast = useCallback((msg: string) => {
@@ -167,13 +176,16 @@ export default function App() {
 
   const commitDocUpdate = useCallback(
     (updater: (prev: DocumentSnapshot) => DocumentSnapshot, recordUndo = true) => {
-      setDoc(prev => {
-        const next = updater(prev);
-        if (recordUndo) {
-          setUndoStack(stack => [...stack.slice(-39), prev]);
-        }
-        return next;
-      });
+      const prev = docRef.current;
+      const next = updater(prev);
+      if (next === prev) return;
+      if (recordUndo) {
+        const nextStack = [...undoStackRef.current.slice(-39), prev];
+        undoStackRef.current = nextStack;
+        setUndoStack(nextStack);
+      }
+      docRef.current = next;
+      setDoc(next);
     },
     [],
   );
@@ -181,10 +193,15 @@ export default function App() {
   // Initialize Meta Neural Band `emg-wrist` RelativeOrientationSensor
   useEffect(() => {
     const controller = new WristSensorController({
+      onStatusChange: nextStatus => {
+        telemetryStatusRef.current = nextStatus;
+      },
       onReading: nextTelemetry => {
         const now = performance.now();
+        telemetryStatusRef.current = nextTelemetry.status;
 
         // Update active 3D wrist stroke at <= 30 Hz (33ms frame budget)
+        // Uses EMA-smoothed sensor deltas + virtual lazy-brush string (4px) to eliminate tremor jitter.
         if (
           modeRef.current === 'DRAW_HOLD' &&
           activeStrokeRef.current &&
@@ -192,37 +209,41 @@ export default function App() {
           now - lastDrawTickRef.current >= 33
         ) {
           lastDrawTickRef.current = now;
-          const sensitivity = 560;
-          const nextX = clamp(
+          const sensitivity = 350;
+          const targetX = clamp(
             drawOriginRef.current.x + nextTelemetry.deltaPointing.dx * sensitivity,
             8,
             LOGICAL_PAGE_WIDTH - 8,
           );
-          const nextY = clamp(
+          const targetY = clamp(
             drawOriginRef.current.y + nextTelemetry.deltaPointing.dy * sensitivity,
             8,
             maxSheetHeight - 8,
           );
-          const dynamicWidth = clamp(
-            PEN_WIDTHS[penWidthIdx] + (nextTelemetry.rollDeg / 45) * 1.8,
-            1.5,
-            9,
-          );
 
-          const pts = activeStrokeRef.current.points;
-          const prevPt = pts[pts.length - 1];
-          const moved = !prevPt || Math.hypot(nextX - prevPt.x, nextY - prevPt.y) >= 1.8;
+          const STRING_RADIUS = 4.0;
+          const curPen = penPosRef.current;
+          const pullDist = Math.hypot(targetX - curPen.x, targetY - curPen.y);
 
-          penPosRef.current = { x: nextX, y: nextY };
-          setPenPos({ x: nextX, y: nextY });
+          if (pullDist > STRING_RADIUS) {
+            const stepRatio = (pullDist - STRING_RADIUS) / pullDist;
+            const nextX = curPen.x + (targetX - curPen.x) * stepRatio;
+            const nextY = curPen.y + (targetY - curPen.y) * stepRatio;
+            const strokeWidth = PEN_WIDTHS[penWidthIdx];
 
-          if (moved) {
-            const updated: InkStroke = {
-              ...activeStrokeRef.current,
-              points: [...pts, { x: nextX, y: nextY, width: dynamicWidth }],
-            };
-            activeStrokeRef.current = updated;
-            setActiveStroke(updated);
+            penPosRef.current = { x: nextX, y: nextY };
+            setPenPos({ x: nextX, y: nextY });
+
+            const pts = activeStrokeRef.current.points;
+            const prevPt = pts[pts.length - 1];
+            if (!prevPt || Math.hypot(nextX - prevPt.x, nextY - prevPt.y) >= 3.0) {
+              const updated: InkStroke = {
+                ...activeStrokeRef.current,
+                points: [...pts, { x: nextX, y: nextY, width: strokeWidth }],
+              };
+              activeStrokeRef.current = updated;
+              setActiveStroke(updated);
+            }
           }
         }
 
@@ -256,8 +277,70 @@ export default function App() {
     };
   }, [maxSheetHeight, penWidthIdx]);
 
+  const finalizeLiveTextSession = useCallback(() => {
+    const session = liveSessionRef.current;
+    if (session && session.appliedLength > 0) {
+      const nextStack = [...undoStackRef.current.slice(-39), session.preSessionSnapshot];
+      undoStackRef.current = nextStack;
+      setUndoStack(nextStack);
+      const insertedSnippet =
+        docRef.current.blocks[session.lineIndex]?.text.slice(
+          session.startCharIndex,
+          session.startCharIndex + session.appliedLength,
+        ) ?? '';
+      if (insertedSnippet) {
+        showToast(
+          `Inserted "${insertedSnippet.slice(0, 22)}${insertedSnippet.length > 22 ? '…' : ''}"`,
+        );
+      }
+    }
+    liveSessionRef.current = null;
+    setComposerDraft('');
+  }, [showToast]);
+
+  const handleLiveTextInput = useCallback((rawText: string) => {
+    const sanitized = rawText.replace(/\r?\n/g, ' ');
+    setComposerDraft(sanitized);
+
+    const prev = docRef.current;
+    if (!liveSessionRef.current) {
+      liveSessionRef.current = {
+        lineIndex: prev.cursor.lineIndex,
+        startCharIndex: prev.cursor.charIndex,
+        appliedLength: 0,
+        preSessionSnapshot: prev,
+      };
+    }
+
+    const session = liveSessionRef.current;
+    const target = prev.blocks[session.lineIndex];
+    if (!target) return;
+
+    const before = target.text.slice(0, session.startCharIndex);
+    const after = target.text.slice(session.startCharIndex + session.appliedLength);
+    const updatedBlock: DocBlock = {
+      ...target,
+      text: before + sanitized + after,
+    };
+    const blocks = [...prev.blocks];
+    blocks[session.lineIndex] = updatedBlock;
+    session.appliedLength = sanitized.length;
+
+    const nextDoc: DocumentSnapshot = {
+      ...prev,
+      blocks,
+      cursor: {
+        lineIndex: session.lineIndex,
+        charIndex: session.startCharIndex + sanitized.length,
+      },
+    };
+    docRef.current = nextDoc;
+    setDoc(nextDoc);
+  }, []);
+
   // Document editing operations
   const handleSwipeUp = useCallback(() => {
+    finalizeLiveTextSession();
     setDoc(prev => {
       const nextLine = Math.max(0, prev.cursor.lineIndex - 1);
       if (nextLine === prev.cursor.lineIndex && scrollRef.current) {
@@ -273,9 +356,10 @@ export default function App() {
         },
       };
     });
-  }, []);
+  }, [finalizeLiveTextSession]);
 
   const handleSwipeDown = useCallback(() => {
+    finalizeLiveTextSession();
     setDoc(prev => {
       const nextLine = Math.min(prev.blocks.length - 1, prev.cursor.lineIndex + 1);
       if (nextLine === prev.cursor.lineIndex && scrollRef.current) {
@@ -291,9 +375,10 @@ export default function App() {
         },
       };
     });
-  }, []);
+  }, [finalizeLiveTextSession]);
 
   const handleSwipeLeft = useCallback(() => {
+    finalizeLiveTextSession();
     setDoc(prev => {
       const nextChar = Math.max(0, prev.cursor.charIndex - 1);
       if (nextChar === prev.cursor.charIndex) return prev;
@@ -302,9 +387,10 @@ export default function App() {
         cursor: { ...prev.cursor, charIndex: nextChar },
       };
     });
-  }, []);
+  }, [finalizeLiveTextSession]);
 
   const handleSwipeRight = useCallback(() => {
+    finalizeLiveTextSession();
     setDoc(prev => {
       const lineText = prev.blocks[prev.cursor.lineIndex]?.text ?? '';
       const nextChar = Math.min(lineText.length, prev.cursor.charIndex + 1);
@@ -314,73 +400,10 @@ export default function App() {
         cursor: { ...prev.cursor, charIndex: nextChar },
       };
     });
-  }, []);
-
-  const insertTextAtCursor = useCallback(
-    (rawText: string) => {
-      if (!rawText) return;
-      const linesToInsert = rawText.replace(/\r\n/g, '\n').split('\n');
-      commitDocUpdate(prev => {
-        const { lineIndex, charIndex } = prev.cursor;
-        const target = prev.blocks[lineIndex];
-        if (!target) return prev;
-
-        const before = target.text.slice(0, charIndex);
-        const after = target.text.slice(charIndex);
-
-        if (linesToInsert.length === 1) {
-          const updatedBlock: DocBlock = {
-            ...target,
-            text: before + linesToInsert[0] + after,
-          };
-          const blocks = [...prev.blocks];
-          blocks[lineIndex] = updatedBlock;
-          return {
-            ...prev,
-            blocks,
-            cursor: { lineIndex, charIndex: charIndex + linesToInsert[0].length },
-          };
-        }
-
-        const firstBlock: DocBlock = { ...target, text: before + linesToInsert[0] };
-        const middleBlocks: DocBlock[] = linesToInsert.slice(1, -1).map(text => ({
-          id: makeId('b'),
-          kind: 'p',
-          text,
-        }));
-        const lastInserted = linesToInsert[linesToInsert.length - 1];
-        const endBlock: DocBlock = {
-          id: makeId('b'),
-          kind: target.kind === 'bullet' ? 'bullet' : 'p',
-          text: lastInserted + after,
-        };
-
-        const blocks = [
-          ...prev.blocks.slice(0, lineIndex),
-          firstBlock,
-          ...middleBlocks,
-          endBlock,
-          ...prev.blocks.slice(lineIndex + 1),
-        ];
-
-        return {
-          ...prev,
-          blocks,
-          cursor: {
-            lineIndex: lineIndex + linesToInsert.length - 1,
-            charIndex: lastInserted.length,
-          },
-        };
-      });
-      setComposerDraft('');
-      setMode('DOCUMENT');
-      composerInputRef.current?.blur();
-      showToast(`Inserted "${rawText.slice(0, 22)}${rawText.length > 22 ? '…' : ''}"`);
-    },
-    [commitDocUpdate, showToast],
-  );
+  }, [finalizeLiveTextSession]);
 
   const insertNewLineAtCursor = useCallback(() => {
+    finalizeLiveTextSession();
     commitDocUpdate(prev => {
       const { lineIndex, charIndex } = prev.cursor;
       const target = prev.blocks[lineIndex];
@@ -407,9 +430,10 @@ export default function App() {
       };
     });
     showToast('New line inserted');
-  }, [commitDocUpdate, showToast]);
+  }, [commitDocUpdate, finalizeLiveTextSession, showToast]);
 
   const backspaceAtCursor = useCallback(() => {
+    finalizeLiveTextSession();
     commitDocUpdate(prev => {
       const { lineIndex, charIndex } = prev.cursor;
       const target = prev.blocks[lineIndex];
@@ -447,42 +471,83 @@ export default function App() {
 
       return prev;
     });
-  }, [commitDocUpdate]);
+  }, [commitDocUpdate, finalizeLiveTextSession]);
 
   const handleUndo = useCallback(() => {
-    setUndoStack(stack => {
-      if (stack.length === 0) {
-        showToast('Nothing to undo');
-        return stack;
+    finalizeLiveTextSession();
+    const stack = undoStackRef.current;
+    if (stack.length === 0) {
+      showToast('Nothing to undo');
+      return;
+    }
+    const last = stack[stack.length - 1];
+    const nextStack = stack.slice(0, -1);
+    undoStackRef.current = nextStack;
+    setUndoStack(nextStack);
+    docRef.current = last;
+    setDoc(last);
+    showToast('Reverted last stroke / edit');
+  }, [finalizeLiveTextSession, showToast]);
+
+  // 3D Wrist & Pointer Drawing Hold Handlers
+  const startWristDrawHold = useCallback(
+    (pointerStart?: { x: number; y: number }) => {
+      finalizeLiveTextSession();
+      if (modeRef.current === 'COMPOSER') {
+        composerInputRef.current?.blur();
       }
-      const last = stack[stack.length - 1];
-      setDoc(last);
-      showToast('Undid last change');
-      return stack.slice(0, -1);
-    });
-  }, [showToast]);
+      sensorRef.current?.captureReference();
 
-  // 3D Wrist Drawing Hold Handlers
-  const startWristDrawHold = useCallback(() => {
-    sensorRef.current?.captureReference();
-    const startX = penPosRef.current.x;
-    const startY = clamp(88 + docRef.current.cursor.lineIndex * 36, 40, maxSheetHeight - 40);
-    const origin = { x: startX, y: startY };
-    drawOriginRef.current = origin;
-    penPosRef.current = origin;
-    setPenPos(origin);
+      const usePointerOrigin = Boolean(pointerStart && telemetryStatusRef.current !== 'live');
+      const origin = usePointerOrigin && pointerStart
+        ? pointerStart
+        : {
+            x: penPosRef.current.x,
+            y: clamp(88 + docRef.current.cursor.lineIndex * 36, 40, maxSheetHeight - 40),
+          };
 
-    const newStroke: InkStroke = {
-      id: makeId('s'),
-      color: PEN_COLORS[penColorIdx].hex,
-      baseWidth: PEN_WIDTHS[penWidthIdx],
-      points: [{ x: origin.x, y: origin.y, width: PEN_WIDTHS[penWidthIdx] }],
-    };
-    activeStrokeRef.current = newStroke;
-    setActiveStroke(newStroke);
-    setMode('DRAW_HOLD');
-    modeRef.current = 'DRAW_HOLD';
-  }, [maxSheetHeight, penColorIdx, penWidthIdx]);
+      drawOriginRef.current = origin;
+      penPosRef.current = origin;
+      setPenPos(origin);
+
+      const newStroke: InkStroke = {
+        id: makeId('s'),
+        color: PEN_COLORS[penColorIdx].hex,
+        baseWidth: PEN_WIDTHS[penWidthIdx],
+        points: [{ x: origin.x, y: origin.y, width: PEN_WIDTHS[penWidthIdx] }],
+      };
+      activeStrokeRef.current = newStroke;
+      setActiveStroke(newStroke);
+      setMode('DRAW_HOLD');
+      modeRef.current = 'DRAW_HOLD';
+    },
+    [finalizeLiveTextSession, maxSheetHeight, penColorIdx, penWidthIdx],
+  );
+
+  const handleHoldMove = useCallback(
+    (x: number, y: number) => {
+      // When physical emg-wrist sensor is live, never let WebView pointermove fight 3D wrist coords
+      if (telemetryStatusRef.current === 'live') return;
+      if (!activeStrokeRef.current) return;
+      const now = performance.now();
+      if (now - lastDrawTickRef.current < 16) return;
+      lastDrawTickRef.current = now;
+
+      const pts = activeStrokeRef.current.points;
+      const prevPt = pts[pts.length - 1];
+      if (!prevPt || Math.hypot(x - prevPt.x, y - prevPt.y) >= 2.5) {
+        penPosRef.current = { x, y };
+        setPenPos({ x, y });
+        const updated: InkStroke = {
+          ...activeStrokeRef.current,
+          points: [...pts, { x, y, width: PEN_WIDTHS[penWidthIdx] }],
+        };
+        activeStrokeRef.current = updated;
+        setActiveStroke(updated);
+      }
+    },
+    [penWidthIdx],
+  );
 
   const finishWristDrawHold = useCallback(() => {
     const stroke = activeStrokeRef.current;
@@ -500,58 +565,6 @@ export default function App() {
       showToast(`Ink stroke saved (${stroke.points.length} pts)`);
     }
   }, [commitDocUpdate, showToast]);
-
-  // Pointer-event continuous drag drawing (for `touch-action: none` on Meta glasses & mouse drag)
-  const handlePointerDrawStart = useCallback(
-    (x: number, y: number) => {
-      if (modeRef.current === 'COMPOSER') {
-        composerInputRef.current?.blur();
-      }
-      sensorRef.current?.captureReference();
-      drawOriginRef.current = { x, y };
-      penPosRef.current = { x, y };
-      setPenPos({ x, y });
-
-      const newStroke: InkStroke = {
-        id: makeId('s'),
-        color: PEN_COLORS[penColorIdx].hex,
-        baseWidth: PEN_WIDTHS[penWidthIdx],
-        points: [{ x, y, width: PEN_WIDTHS[penWidthIdx] }],
-      };
-      activeStrokeRef.current = newStroke;
-      setActiveStroke(newStroke);
-      setMode('DRAW_HOLD');
-      modeRef.current = 'DRAW_HOLD';
-    },
-    [penColorIdx, penWidthIdx],
-  );
-
-  const handlePointerDrawMove = useCallback(
-    (x: number, y: number) => {
-      if (!activeStrokeRef.current) return;
-      const now = performance.now();
-      if (now - lastDrawTickRef.current < 16) return;
-      lastDrawTickRef.current = now;
-
-      const pts = activeStrokeRef.current.points;
-      const prevPt = pts[pts.length - 1];
-      if (!prevPt || Math.hypot(x - prevPt.x, y - prevPt.y) >= 1.5) {
-        penPosRef.current = { x, y };
-        setPenPos({ x, y });
-        const updated: InkStroke = {
-          ...activeStrokeRef.current,
-          points: [...pts, { x, y, width: PEN_WIDTHS[penWidthIdx] }],
-        };
-        activeStrokeRef.current = updated;
-        setActiveStroke(updated);
-      }
-    },
-    [penWidthIdx],
-  );
-
-  const handlePointerDrawEnd = useCallback(() => {
-    finishWristDrawHold();
-  }, [finishWristDrawHold]);
 
   // Toolbar Actions: Left/Right switches category, Up/Down cycles options or toggles binary state
   const stepBlockKind = useCallback(
@@ -792,6 +805,7 @@ export default function App() {
   const controls = useWristbandControls({
     mode,
     isComposerEmpty: composerDraft.length === 0,
+    isLiveWristSensor: telemetry.status === 'live',
     onSwipeUp: handleSwipeUp,
     onSwipeDown: handleSwipeDown,
     onSwipeLeft: handleSwipeLeft,
@@ -799,12 +813,16 @@ export default function App() {
     onTipSingleTap: () => {
       setMode('COMPOSER');
       composerInputRef.current?.focus();
+      showToast('Write ready — tap Tip again to write');
     },
     onTipDoubleTap: insertNewLineAtCursor,
     onTipTripleTap: () => {
+      finalizeLiveTextSession();
+      composerInputRef.current?.blur();
       setMode(curr => (curr === 'TOOLBAR' ? 'DOCUMENT' : 'TOOLBAR'));
     },
     onTipHoldStart: startWristDrawHold,
+    onTipHoldMove: handleHoldMove,
     onTipHoldEnd: finishWristDrawHold,
     onSideSingleTap: () => {
       if (mode === 'TOOLBAR') {
@@ -812,6 +830,7 @@ export default function App() {
         return;
       }
       if (mode === 'COMPOSER') {
+        finalizeLiveTextSession();
         setMode('DOCUMENT');
         composerInputRef.current?.blur();
         return;
@@ -904,7 +923,7 @@ export default function App() {
           title={doc.title}
           blocks={doc.blocks}
           cursor={doc.cursor}
-          composerDraft={composerDraft}
+          composerDraft=""
           strokes={doc.strokes}
           activeStroke={activeStroke}
           penPos={penPos}
@@ -912,6 +931,7 @@ export default function App() {
           mode={mode}
           scrollRef={scrollRef}
           onSelectLine={(lineIndex, charIndex) => {
+            finalizeLiveTextSession();
             setDoc(prev => ({
               ...prev,
               cursor: {
@@ -920,19 +940,35 @@ export default function App() {
               },
             }));
           }}
-          onPointerDrawStart={handlePointerDrawStart}
-          onPointerDrawMove={handlePointerDrawMove}
-          onPointerDrawEnd={handlePointerDrawEnd}
+          onSheetPointerDown={(x, y) => controls.beginPointerTipPress(x, y)}
+          onSheetPointerMove={(x, y) => controls.movePointerTipPress(x, y)}
+          onSheetPointerUp={() => controls.endPointerTipPress()}
+          onSheetPointerCancel={() => controls.cancelPointerTipPress()}
         />
 
         <NeuralComposer
           draft={composerDraft}
           mode={mode}
+          canUndo={undoStack.length > 0}
           inputRef={composerInputRef}
-          onDraftChange={setComposerDraft}
-          onCommitDraft={insertTextAtCursor}
+          onLiveTextInput={handleLiveTextInput}
+          onFinalizeSession={() => {
+            finalizeLiveTextSession();
+            setMode('DOCUMENT');
+            composerInputRef.current?.blur();
+          }}
           onFocusComposer={() => setMode('COMPOSER')}
-          onExitComposer={() => setMode('DOCUMENT')}
+          onExitComposer={() => {
+            finalizeLiveTextSession();
+            setMode('DOCUMENT');
+            composerInputRef.current?.blur();
+          }}
+          onUndo={handleUndo}
+          onToggleToolbar={() => {
+            finalizeLiveTextSession();
+            composerInputRef.current?.blur();
+            setMode(curr => (curr === 'TOOLBAR' ? 'DOCUMENT' : 'TOOLBAR'));
+          }}
         />
 
         <section className="toolbar-zone" aria-label="Word formatting and drawing toolbar">
