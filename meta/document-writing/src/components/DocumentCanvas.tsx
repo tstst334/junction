@@ -18,6 +18,8 @@ interface DocumentCanvasProps {
   activeStroke: InkStroke | null;
   penPos: { x: number; y: number };
   penColor: string;
+  rollDeg: number;
+  composerPreview?: string | null;
   mode: InteractionMode;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   onSelectLine: (lineIndex: number, charIndex?: number) => void;
@@ -62,6 +64,8 @@ export function DocumentCanvas({
   activeStroke,
   penPos,
   penColor,
+  rollDeg,
+  composerPreview = null,
   mode,
   scrollRef,
   onSelectLine,
@@ -192,6 +196,16 @@ export function DocumentCanvas({
                   className={`doc-cursor-caret ${mode === 'COMPOSER' ? 'is-composing' : ''}`}
                   aria-label="Text cursor"
                 />
+                {mode === 'CURSOR_SCRUB' && (
+                  <span className="doc-cursor-zoom-badge" aria-live="polite">
+                    ◀ Col {clampedCol + 1} ▶ ({rollDeg > 0 ? `+${rollDeg}` : rollDeg}°)
+                  </span>
+                )}
+                {mode === 'COMPOSER' && composerPreview && (
+                  <span className="doc-composer-preview-pill" aria-live="polite">
+                    {composerPreview}
+                  </span>
+                )}
                 <span>{after}</span>
                 {block.text.length === 0 && !composerDraft && (
                   <span className="doc-empty-hint">Empty line — 1x Tip Tap to Neural Write</span>
@@ -212,7 +226,15 @@ export function DocumentCanvas({
   return (
     <div
       ref={scrollRef}
-      className={`doc-scroll-viewport ${mode === 'DRAW_HOLD' ? 'is-draw-active' : ''}`}
+      className={`doc-scroll-viewport ${
+        mode === 'DRAW_HOLD'
+          ? 'is-draw-active'
+          : mode === 'ERASE_HOLD'
+            ? 'is-erase-active'
+            : mode === 'CURSOR_SCRUB'
+              ? 'is-scrub-active'
+              : ''
+      }`}
       aria-label="Word document workspace"
     >
       <div
@@ -261,6 +283,19 @@ export function DocumentCanvas({
               <line x1="6" y1="0" x2="15" y2="0" stroke={penColor} strokeWidth="1.4" />
               <line x1="0" y1="-15" x2="0" y2="-6" stroke={penColor} strokeWidth="1.4" />
               <line x1="0" y1="6" x2="0" y2="15" stroke={penColor} strokeWidth="1.4" />
+            </g>
+          )}
+
+          {mode === 'ERASE_HOLD' && (
+            <g transform={`translate(${penPos.x}, ${penPos.y})`}>
+              <circle
+                r="16"
+                fill="rgba(255, 117, 143, 0.16)"
+                stroke="#ff758f"
+                strokeWidth="1.8"
+                strokeDasharray="4 3"
+              />
+              <circle r="2.5" fill="#ff758f" />
             </g>
           )}
         </svg>

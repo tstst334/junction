@@ -33,7 +33,13 @@ export interface DocumentSnapshot {
   cursor: CursorPosition;
 }
 
-export type InteractionMode = 'DOCUMENT' | 'COMPOSER' | 'TOOLBAR' | 'DRAW_HOLD';
+export type InteractionMode =
+  | 'DOCUMENT'
+  | 'COMPOSER'
+  | 'TOOLBAR'
+  | 'DRAW_HOLD'
+  | 'ERASE_HOLD'
+  | 'CURSOR_SCRUB';
 
 export type SensorStatus =
   | 'checking'

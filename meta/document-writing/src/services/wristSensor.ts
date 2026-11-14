@@ -132,6 +132,24 @@ function mulQuat(a: Quat, b: Quat): Quat {
   ];
 }
 
+/**
+ * Gravity-referenced wrist roll (radians) around the forearm pointing direction.
+ * Anchors roll to horizontal/vertical world axes so moving the arm in space does
+ * not leak into forearm twist, falling back to twistAngle near vertical.
+ */
+export function gravityRollAngle(q: Quat): number {
+  const dir = normalize(pointingDirection(q));
+  const right = cross(dir, WORLD_UP);
+  const horizLen = Math.hypot(right[0], right[1], right[2]);
+  if (horizLen < 0.2) {
+    return twistAngle(q);
+  }
+  const rightUnit: Vec3 = [right[0] / horizLen, right[1] / horizLen, right[2] / horizLen];
+  const upUnit = normalize(cross(rightUnit, dir));
+  const acrossWorld = rotate(q, [1, 0, 0]);
+  return Math.atan2(-dot(acrossWorld, upUnit), dot(acrossWorld, rightUnit));
+}
+
 export interface PointingBasis {
   refDir: Vec3;
   rightAxis: Vec3;
@@ -152,7 +170,7 @@ export function createPointingBasis(q: Quat): PointingBasis {
     refDir,
     rightAxis,
     upAxis,
-    refTwist: twistAngle(q),
+    refTwist: gravityRollAngle(q),
   };
 }
 
@@ -165,9 +183,9 @@ export function projectPointingDelta(
   basis: PointingBasis,
 ): { dx: number; dy: number; rollRad: number } {
   const dir = normalize(pointingDirection(q));
-  const dx = dot(dir, basis.rightAxis);
+  const dx = -dot(dir, basis.rightAxis);
   const dy = -dot(dir, basis.upAxis);
-  const rollRad = wrapAngle(twistAngle(q) - basis.refTwist);
+  const rollRad = wrapAngle(gravityRollAngle(q) - basis.refTwist);
   return { dx, dy, rollRad };
 }
 
@@ -191,6 +209,7 @@ export class WristSensorController {
   private isSimulating = false;
   private smoothDx = 0;
   private smoothDy = 0;
+  private smoothRoll = 0;
   private hasSmoothSample = false;
   private readonly onReading: (telemetry: WristTelemetry) => void;
   private readonly onStatusChange?: (status: SensorStatus) => void;
@@ -256,6 +275,7 @@ export class WristSensorController {
     this.basis = createPointingBasis(this.latestW3C);
     this.smoothDx = 0;
     this.smoothDy = 0;
+    this.smoothRoll = 0;
     this.hasSmoothSample = false;
     this.emitTelemetry();
     return this.basis;
@@ -265,6 +285,7 @@ export class WristSensorController {
     this.basis = null;
     this.smoothDx = 0;
     this.smoothDy = 0;
+    this.smoothRoll = 0;
     this.hasSmoothSample = false;
     this.emitTelemetry();
   }
@@ -391,6 +412,7 @@ export class WristSensorController {
       if (!this.hasSmoothSample) {
         this.smoothDx = rawDelta.dx;
         this.smoothDy = rawDelta.dy;
+        this.smoothRoll = rawDelta.rollRad;
         this.hasSmoothSample = true;
       } else {
         // Adaptive low-pass filter: strong tremor damping on tiny motions,
@@ -399,14 +421,17 @@ export class WristSensorController {
         const alpha = stepDist < 0.015 ? 0.14 : Math.min(0.42, 0.14 + (stepDist - 0.015) * 3.5);
         this.smoothDx += alpha * (rawDelta.dx - this.smoothDx);
         this.smoothDy += alpha * (rawDelta.dy - this.smoothDy);
+        this.smoothRoll = wrapAngle(
+          this.smoothRoll + 0.28 * wrapAngle(rawDelta.rollRad - this.smoothRoll),
+        );
       }
       smoothedDelta = { dx: this.smoothDx, dy: this.smoothDy };
     }
 
     const rollDeg = rawDelta
-      ? Math.round((rawDelta.rollRad * 180) / Math.PI)
+      ? Math.round((this.smoothRoll * 180) / Math.PI)
       : q
-        ? Math.round((twistAngle(q) * 180) / Math.PI)
+        ? Math.round((gravityRollAngle(q) * 180) / Math.PI)
         : 0;
 
     this.onReading({

@@ -15,8 +15,12 @@ export interface WristbandControlHandlers {
   onTipHoldStart: (pointerStart?: { x: number; y: number }) => void;
   onTipHoldMove: (x: number, y: number) => void;
   onTipHoldEnd: () => void;
+  onTipDoubleHoldStart: (pointerStart?: { x: number; y: number }) => void;
+  onTipDoubleHoldMove: (x: number, y: number) => void;
+  onTipDoubleHoldEnd: () => void;
   onSideSingleTap: () => void;
   onSideDoubleTap: () => void;
+  onComposerNavigate: (direction: 'up' | 'down' | 'left' | 'right') => void;
   onToolbarNavigate: (direction: 'up' | 'down' | 'left' | 'right') => void;
   onToolbarActivate: () => void;
   onGestureLog: (label: string, detail: string) => void;
@@ -37,7 +41,8 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
   const lastPressUpStampRef = useRef(0);
   const pointerOriginRef = useRef<{ x: number; y: number } | null>(null);
 
-  const tipHoldActiveRef = useRef(false);
+  const activeHoldKindRef = useRef<'none' | 'single' | 'double'>('none');
+  const pressTapIndexRef = useRef(0);
   const tipHoldTimerRef = useRef<number | null>(null);
   const tipTapCountRef = useRef(0);
   const tipTapTimerRef = useRef<number | null>(null);
@@ -72,6 +77,9 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
       if (h.mode === 'TOOLBAR') {
         h.onGestureLog('Tip Tap 1x', 'Apply toolbar option');
         h.onToolbarActivate();
+      } else if (h.mode === 'COMPOSER') {
+        h.onGestureLog('Tip Tap 1x', 'Writer insert / activate');
+        h.onTipSingleTap();
       } else {
         h.onGestureLog('Tip Tap 1x', 'Focus Neural Writer');
         h.onTipSingleTap();
@@ -80,6 +88,9 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
       if (h.mode === 'TOOLBAR') {
         h.onGestureLog('Tip Tap 2x', 'Close Word toolbar');
         h.onSideSingleTap();
+      } else if (h.mode === 'COMPOSER') {
+        h.onGestureLog('Tip Tap 2x', 'Insert Space / Exit');
+        h.onTipDoubleTap();
       } else {
         h.onGestureLog('Tip Tap 2x', 'New line at cursor');
         h.onTipDoubleTap();
@@ -107,21 +118,29 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
     }
   }, []);
 
-  const activateDrawHold = useCallback((pointerStart?: { x: number; y: number }) => {
-    const h = handlersRef.current;
-    tipHoldActiveRef.current = true;
-    tipTapCountRef.current = 0;
-    if (tipTapTimerRef.current !== null) {
-      window.clearTimeout(tipTapTimerRef.current);
-      tipTapTimerRef.current = null;
-    }
-    if (tipHoldTimerRef.current !== null) {
-      window.clearTimeout(tipHoldTimerRef.current);
-      tipHoldTimerRef.current = null;
-    }
-    h.onGestureLog('Tip Hold + Move Wrist', '3D Wrist Draw active');
-    h.onTipHoldStart(pointerStart);
-  }, []);
+  const activateHold = useCallback(
+    (kind: 'single' | 'double', pointerStart?: { x: number; y: number }) => {
+      const h = handlersRef.current;
+      activeHoldKindRef.current = kind;
+      tipTapCountRef.current = 0;
+      if (tipTapTimerRef.current !== null) {
+        window.clearTimeout(tipTapTimerRef.current);
+        tipTapTimerRef.current = null;
+      }
+      if (tipHoldTimerRef.current !== null) {
+        window.clearTimeout(tipHoldTimerRef.current);
+        tipHoldTimerRef.current = null;
+      }
+      if (kind === 'double') {
+        h.onGestureLog('Tip 2x + Hold', 'Eraser active — move wrist over ink');
+        h.onTipDoubleHoldStart(pointerStart);
+      } else {
+        h.onGestureLog('Tip 1x + Hold', 'Wrist draw / rotate arm cursor zoom');
+        h.onTipHoldStart(pointerStart);
+      }
+    },
+    [],
+  );
 
   const beginTipPress = useCallback(
     (source: 'key' | 'pointer' = 'key', pointerCoords?: { x: number; y: number }) => {
@@ -131,12 +150,18 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
         return;
       }
 
-      const h = handlersRef.current;
+      // Pause multi-tap expiration while a 2nd-tap hold or 3rd tap is in progress
+      if (tipTapTimerRef.current !== null) {
+        window.clearTimeout(tipTapTimerRef.current);
+        tipTapTimerRef.current = null;
+      }
+
       lastPressDownStampRef.current = now;
       tipDownAtRef.current = now;
       tipPressSourceRef.current = source;
       pointerOriginRef.current = pointerCoords ?? null;
-      tipHoldActiveRef.current = false;
+      activeHoldKindRef.current = 'none';
+      pressTapIndexRef.current = tipTapCountRef.current;
 
       if (tipHoldTimerRef.current !== null) {
         window.clearTimeout(tipHoldTimerRef.current);
@@ -144,12 +169,17 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
 
       tipHoldTimerRef.current = window.setTimeout(() => {
         tipHoldTimerRef.current = null;
-        if (tipDownAtRef.current !== null && (h.mode === 'DOCUMENT' || h.mode === 'COMPOSER')) {
-          activateDrawHold(pointerOriginRef.current ?? undefined);
+        const latest = handlersRef.current;
+        if (
+          tipDownAtRef.current !== null &&
+          (latest.mode === 'DOCUMENT' || latest.mode === 'COMPOSER')
+        ) {
+          const kind = pressTapIndexRef.current >= 1 ? 'double' : 'single';
+          activateHold(kind, pointerOriginRef.current ?? undefined);
         }
       }, HOLD_THRESHOLD_MS);
     },
-    [activateDrawHold],
+    [activateHold],
   );
 
   const movePointerTipPress = useCallback(
@@ -157,22 +187,31 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
       if (tipDownAtRef.current === null || tipPressSourceRef.current !== 'pointer') return;
       const h = handlersRef.current;
 
-      if (!tipHoldActiveRef.current) {
-        // On desktop (when emg-wrist is not live), dragging > 10px enters drawing immediately.
+      if (activeHoldKindRef.current === 'none') {
+        // On desktop (when emg-wrist is not live), dragging > 10px enters draw/erase immediately.
         // On glasses (when emg-wrist IS live), wait for the 260ms hold threshold so 3x taps never draw.
         if (!h.isLiveWristSensor && pointerOriginRef.current) {
           const dist = Math.hypot(x - pointerOriginRef.current.x, y - pointerOriginRef.current.y);
           if (dist >= DRAG_HOLD_DISTANCE_PX) {
-            activateDrawHold(pointerOriginRef.current);
-            h.onTipHoldMove(x, y);
+            const kind = pressTapIndexRef.current >= 1 ? 'double' : 'single';
+            activateHold(kind, pointerOriginRef.current);
+            if (kind === 'double') {
+              h.onTipDoubleHoldMove(x, y);
+            } else {
+              h.onTipHoldMove(x, y);
+            }
           }
         }
         return;
       }
 
-      h.onTipHoldMove(x, y);
+      if (activeHoldKindRef.current === 'double') {
+        h.onTipDoubleHoldMove(x, y);
+      } else {
+        h.onTipHoldMove(x, y);
+      }
     },
-    [activateDrawHold],
+    [activateHold],
   );
 
   const endTipPress = useCallback(
@@ -194,9 +233,16 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
         tipHoldTimerRef.current = null;
       }
 
-      if (tipHoldActiveRef.current) {
-        tipHoldActiveRef.current = false;
-        h.onGestureLog('Tip Release', 'Stroke committed');
+      if (activeHoldKindRef.current === 'double') {
+        activeHoldKindRef.current = 'none';
+        h.onGestureLog('Tip 2x Release', 'Eraser finished');
+        h.onTipDoubleHoldEnd();
+        return;
+      }
+
+      if (activeHoldKindRef.current === 'single') {
+        activeHoldKindRef.current = 'none';
+        h.onGestureLog('Tip Release', 'Stroke / scrub finished');
         h.onTipHoldEnd();
         return;
       }
@@ -223,8 +269,11 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
       window.clearTimeout(tipHoldTimerRef.current);
       tipHoldTimerRef.current = null;
     }
-    if (tipHoldActiveRef.current) {
-      tipHoldActiveRef.current = false;
+    if (activeHoldKindRef.current === 'double') {
+      activeHoldKindRef.current = 'none';
+      handlersRef.current.onTipDoubleHoldEnd();
+    } else if (activeHoldKindRef.current === 'single') {
+      activeHoldKindRef.current = 'none';
       handlersRef.current.onTipHoldEnd();
     }
   }, []);
@@ -258,7 +307,7 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
     const onKeyDown = (event: KeyboardEvent) => {
       const h = handlersRef.current;
 
-      // Global Ctrl+Z / Cmd+Z undo for drawing strokes & text edits
+      // Global Ctrl+Z / Cmd+Z undo for drawing strokes, erasures & text edits
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z') {
         event.preventDefault();
         if (!event.repeat) {
@@ -277,8 +326,9 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
 
       // Inside Neural Composer text field:
       // - Escape exits back to DOCUMENT mode.
-      // - When empty, arrows still navigate the document cursor and unmodified Enter is NOT
-      //   preventDefault()ed so activating the focused field opens Meta's Neural Writing composer!
+      // - When empty, arrows navigate the document cursor and unmodified Enter is NOT
+      //   preventDefault()ed so activating the focused field opens Meta's Neural Writing composer,
+      //   while still tracking tip press timing for 1x hold / 2x hold eraser / 3x tap toolbar.
       if (h.mode === 'COMPOSER' || isTextField) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -288,22 +338,31 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
           return;
         }
         if (h.isComposerEmpty) {
+          if (event.key === 'Enter') {
+            if (!isTextField) {
+              event.preventDefault();
+            }
+            if (!event.repeat) {
+              beginTipPress('key');
+            }
+            return;
+          }
           if (event.key === 'ArrowUp') {
             event.preventDefault();
-            h.onGestureLog('Swipe Up', 'Scroll / previous line');
-            h.onSwipeUp();
+            h.onGestureLog('Swipe Up', 'Writer row up');
+            h.onComposerNavigate('up');
           } else if (event.key === 'ArrowDown') {
             event.preventDefault();
-            h.onGestureLog('Swipe Down', 'Scroll / next line');
-            h.onSwipeDown();
+            h.onGestureLog('Swipe Down', 'Writer row down');
+            h.onComposerNavigate('down');
           } else if (event.key === 'ArrowLeft') {
             event.preventDefault();
-            h.onGestureLog('Swipe Left', 'Cursor left in line');
-            h.onSwipeLeft();
+            h.onGestureLog('Swipe Left', 'Writer previous choice');
+            h.onComposerNavigate('left');
           } else if (event.key === 'ArrowRight') {
             event.preventDefault();
-            h.onGestureLog('Swipe Right', 'Cursor right in line');
-            h.onSwipeRight();
+            h.onGestureLog('Swipe Right', 'Writer next choice');
+            h.onComposerNavigate('right');
           }
         }
         return;
@@ -341,7 +400,7 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
         return;
       }
 
-      // DOCUMENT & DRAW_HOLD modes:
+      // DOCUMENT, DRAW_HOLD, ERASE_HOLD & CURSOR_SCRUB modes:
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         h.onGestureLog('Swipe Up', 'Scroll / previous line');
@@ -380,7 +439,12 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
           target.tagName === 'TEXTAREA' ||
           target.isContentEditable);
 
-      if (h.mode === 'COMPOSER' || isTextField) return;
+      if (h.mode === 'COMPOSER' || isTextField) {
+        if (event.key === 'Enter' && h.isComposerEmpty) {
+          endTipPress('key');
+        }
+        return;
+      }
       if (event.key === 'Enter' || (h.mode === 'TOOLBAR' && event.key === ' ')) {
         event.preventDefault();
         endTipPress('key');
@@ -388,7 +452,7 @@ export function useWristbandControls(handlers: WristbandControlHandlers) {
     };
 
     const onBlur = () => {
-      if (tipHoldActiveRef.current) {
+      if (activeHoldKindRef.current !== 'none') {
         cancelTipPress();
       }
     };

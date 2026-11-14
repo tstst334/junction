@@ -12,6 +12,8 @@ interface WristTelemetryHudProps {
   onSimulatedPose: (yawDeg: number, pitchDeg: number, rollDeg: number) => void;
   onStartHoldDrawSim: () => void;
   onEndHoldDrawSim: () => void;
+  onStartHoldEraseSim: () => void;
+  onEndHoldEraseSim: () => void;
   onSimSwipe: (dir: 'up' | 'down' | 'left' | 'right') => void;
   onSimTipTap: (count: 1 | 2 | 3) => void;
   onSimSideTap: (count: 1 | 2) => void;
@@ -33,6 +35,8 @@ export function WristTelemetryHud({
   onSimulatedPose,
   onStartHoldDrawSim,
   onEndHoldDrawSim,
+  onStartHoldEraseSim,
+  onEndHoldEraseSim,
   onSimSwipe,
   onSimTipTap,
   onSimSideTap,
@@ -41,6 +45,7 @@ export function WristTelemetryHud({
   const [pitchDeg, setPitchDeg] = useState(0);
   const [rollDeg, setRollDeg] = useState(0);
   const [simHoldingDraw, setSimHoldingDraw] = useState(false);
+  const [simHoldingErase, setSimHoldingErase] = useState(false);
   const waveRafRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -114,12 +119,16 @@ export function WristTelemetryHud({
         <span className={`sensor-pill ${statusBadge.cls}`}>{statusBadge.label}</span>
         <span className={`mode-pill mode-${mode.toLowerCase()}`}>
           {mode === 'DRAW_HOLD'
-            ? 'DRAWING (HOLDING TIP)'
-            : mode === 'COMPOSER'
-              ? 'NEURAL WRITE'
-              : mode === 'TOOLBAR'
-                ? 'WORD TOOLBAR'
-                : 'DOC CURSOR'}
+            ? 'DRAW (1x HOLD)'
+            : mode === 'ERASE_HOLD'
+              ? 'ERASER (2x HOLD)'
+              : mode === 'CURSOR_SCRUB'
+                ? 'CURSOR ZOOM (ROTATE ARM)'
+                : mode === 'COMPOSER'
+                  ? 'NEURAL WRITE'
+                  : mode === 'TOOLBAR'
+                    ? 'WORD TOOLBAR'
+                    : 'DOC CURSOR'}
         </span>
         <span className="gesture-echo" aria-live="polite">
           {lastGesture ? `${lastGesture.label}: ${lastGesture.detail}` : 'Ready for wristband'}
@@ -179,7 +188,7 @@ export function WristTelemetryHud({
             </div>
 
             <div className="sim-cluster">
-              <span className="sim-cluster-title">3D Wrist Coordinates (Draw Hold)</span>
+              <span className="sim-cluster-title">3D Wrist (1x Draw/Zoom · 2x Eraser)</span>
               <div className="sim-btn-group">
                 <button
                   type="button"
@@ -201,7 +210,29 @@ export function WristTelemetryHud({
                     }
                   }}
                 >
-                  {simHoldingDraw ? 'Holding Tip… Move Sliders' : 'Hold Tip & Move Wrist'}
+                  {simHoldingDraw ? '1x Holding… Move Sliders' : '1x Hold (Draw / Rotate Cursor)'}
+                </button>
+                <button
+                  type="button"
+                  className={simHoldingErase ? 'is-active-erase-hold' : ''}
+                  onPointerDown={() => {
+                    setSimHoldingErase(true);
+                    onStartHoldEraseSim();
+                  }}
+                  onPointerUp={() => {
+                    if (simHoldingErase) {
+                      setSimHoldingErase(false);
+                      onEndHoldEraseSim();
+                    }
+                  }}
+                  onPointerLeave={() => {
+                    if (simHoldingErase) {
+                      setSimHoldingErase(false);
+                      onEndHoldEraseSim();
+                    }
+                  }}
+                >
+                  {simHoldingErase ? 'Erasing… Move Sliders' : '2x Hold Eraser'}
                 </button>
                 <button type="button" onClick={runWristCircleDemo}>
                   Demo Wrist Loop

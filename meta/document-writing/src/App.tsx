@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DocumentCanvas, LOGICAL_PAGE_WIDTH } from './components/DocumentCanvas';
-import { NeuralComposer } from './components/NeuralComposer';
+import {
+  type ComposerRowKind,
+  type InputCapabilityReport,
+  NeuralComposer,
+} from './components/NeuralComposer';
 import { WristTelemetryHud } from './components/WristTelemetryHud';
 import { useWristbandControls } from './hooks/useWristbandControls';
 import { WristSensorController } from './services/wristSensor';
@@ -26,6 +30,98 @@ const PEN_COLORS = [
 
 const PEN_WIDTHS = [2.5, 4.5, 7];
 const BLOCK_KINDS: BlockKind[] = ['p', 'h1', 'h2', 'bullet', 'quote'];
+
+const DIAL_CHARS = [
+  ' ',
+  'a',
+  'b',
+  'c',
+  'd',
+  'e',
+  'f',
+  'g',
+  'h',
+  'i',
+  'j',
+  'k',
+  'l',
+  'm',
+  'n',
+  'o',
+  'p',
+  'q',
+  'r',
+  's',
+  't',
+  'u',
+  'v',
+  'w',
+  'x',
+  'y',
+  'z',
+  '.',
+  ',',
+  '?',
+  '⌫',
+] as const;
+
+const COMMON_WORDS = [
+  'the',
+  'and',
+  'for',
+  'that',
+  'this',
+  'with',
+  'from',
+  'have',
+  'will',
+  'what',
+  'note',
+  'meta',
+  'glasses',
+  'neural',
+  'band',
+  'wrist',
+  'document',
+  'write',
+  'draw',
+  'hello',
+  'world',
+  'project',
+  'update',
+  'meeting',
+  'ideas',
+  'summary',
+  'action',
+  'today',
+  'thanks',
+  'please',
+  'quick',
+  'test',
+  'works',
+  'looks',
+  'great',
+];
+
+const COMPOSER_ROWS: readonly ComposerRowKind[] = ['words', 'dial', 'native'];
+
+function getActiveWordPrefix(lineText: string, charIndex: number): string {
+  const before = lineText.slice(0, clamp(charIndex, 0, lineText.length));
+  const match = before.match(/([A-Za-z]+)$/);
+  return match ? match[1] : '';
+}
+
+function describeElement(el: EventTarget | null): string {
+  if (!el || !(el instanceof Element)) return 'window';
+  if (el === document.body) return 'body';
+  const tag = el.tagName.toLowerCase();
+  const id = el.id ? `#${el.id}` : '';
+  return `${tag}${id}`;
+}
+
+function describeActiveElement(): string {
+  return describeElement(document.activeElement);
+}
 
 function makeId(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 9)}`;
@@ -86,11 +182,91 @@ function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
+const ERASER_RADIUS = 16;
+
+function distToSegmentSq(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const lenSq = abx * abx + aby * aby;
+  if (lenSq <= 1e-6) {
+    return (px - ax) * (px - ax) + (py - ay) * (py - ay);
+  }
+  const t = clamp(((px - ax) * abx + (py - ay) * aby) / lenSq, 0, 1);
+  const projX = ax + t * abx;
+  const projY = ay + t * aby;
+  return (px - projX) * (px - projX) + (py - projY) * (py - projY);
+}
+
+function strokeTouchesEraser(
+  stroke: InkStroke,
+  p0: { x: number; y: number },
+  p1: { x: number; y: number },
+  radius: number,
+): boolean {
+  const pts = stroke.points;
+  if (pts.length === 0) return false;
+  const hitRadius = radius + stroke.baseWidth * 0.5;
+  const hitSq = hitRadius * hitRadius;
+  const mid = { x: (p0.x + p1.x) * 0.5, y: (p0.y + p1.y) * 0.5 };
+  const probes = [p0, mid, p1];
+
+  if (pts.length === 1) {
+    const pt = pts[0];
+    return probes.some(
+      p => (p.x - pt.x) * (p.x - pt.x) + (p.y - pt.y) * (p.y - pt.y) <= hitSq,
+    );
+  }
+
+  for (let i = 0; i < pts.length - 1; i += 1) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    for (const probe of probes) {
+      if (distToSegmentSq(probe.x, probe.y, a.x, a.y, b.x, b.y) <= hitSq) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function stepLazyBrushTarget(
+  origin: { x: number; y: number },
+  curPen: { x: number; y: number },
+  delta: { dx: number; dy: number },
+  maxHeight: number,
+): { x: number; y: number } | null {
+  const sensitivity = 350;
+  const targetX = clamp(origin.x + delta.dx * sensitivity, 8, LOGICAL_PAGE_WIDTH - 8);
+  const targetY = clamp(origin.y + delta.dy * sensitivity, 8, maxHeight - 8);
+  const pullDist = Math.hypot(targetX - curPen.x, targetY - curPen.y);
+  const STRING_RADIUS = 4.0;
+  if (pullDist <= STRING_RADIUS) return null;
+  const stepRatio = (pullDist - STRING_RADIUS) / pullDist;
+  return {
+    x: curPen.x + (targetX - curPen.x) * stepRatio,
+    y: curPen.y + (targetY - curPen.y) * stepRatio,
+  };
+}
+
 export default function App() {
   const [doc, setDoc] = useState<DocumentSnapshot>(loadSavedDocument);
   const [undoStack, setUndoStack] = useState<DocumentSnapshot[]>([]);
   const [mode, setMode] = useState<InteractionMode>('DOCUMENT');
   const [composerDraft, setComposerDraft] = useState('');
+  const [composerRow, setComposerRow] = useState<ComposerRowKind>('dial');
+  const [dialIndex, setDialIndex] = useState(1);
+  const [wordIndex, setWordIndex] = useState(0);
+  const [uppercaseDial, setUppercaseDial] = useState(false);
+  const [showProbe, setShowProbe] = useState(false);
+  const [rawEventLog, setRawEventLog] = useState<string[]>([]);
+  const [activeElTag, setActiveElTag] = useState<string>(() => describeActiveElement());
   const [penColorIdx, setPenColorIdx] = useState(0);
   const [penWidthIdx, setPenWidthIdx] = useState(1);
   const [simulatorFrame, setSimulatorFrame] = useState(true);
@@ -122,6 +298,12 @@ export default function App() {
   undoStackRef.current = undoStack;
   const modeRef = useRef(mode);
   modeRef.current = mode;
+  const composerDraftRef = useRef(composerDraft);
+  composerDraftRef.current = composerDraft;
+  const composerRowRef = useRef(composerRow);
+  composerRowRef.current = composerRow;
+  const dialIndexRef = useRef(dialIndex);
+  dialIndexRef.current = dialIndex;
   const telemetryStatusRef = useRef(telemetry.status);
   telemetryStatusRef.current = telemetry.status;
   const penPosRef = useRef(penPos);
@@ -130,12 +312,14 @@ export default function App() {
   const drawOriginRef = useRef<{ x: number; y: number }>({ x: 270, y: 160 });
   const lastDrawTickRef = useRef(0);
   const lastHudTickRef = useRef(0);
-  const liveSessionRef = useRef<{
-    lineIndex: number;
-    startCharIndex: number;
-    appliedLength: number;
-    preSessionSnapshot: DocumentSnapshot;
-  } | null>(null);
+  const eraseSessionSnapshotRef = useRef<DocumentSnapshot | null>(null);
+  const erasedCountRef = useRef(0);
+  const holdIntentRef = useRef<'pending' | 'draw' | 'scrub'>('pending');
+  const scrubStartColRef = useRef(0);
+  const lastGlideTickRef = useRef(0);
+  const dialHoldingRef = useRef(false);
+  const dialStartIdxRef = useRef(1);
+  const lastDialGlideTickRef = useRef(0);
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const composerInputRef = useRef<HTMLInputElement | null>(null);
@@ -190,6 +374,40 @@ export default function App() {
     [],
   );
 
+  const eraseStrokesAt = useCallback(
+    (p0: { x: number; y: number }, p1: { x: number; y: number }) => {
+      const prev = docRef.current;
+      if (prev.strokes.length === 0) return;
+
+      const remaining: InkStroke[] = [];
+      let removedHere = 0;
+      for (const stroke of prev.strokes) {
+        if (strokeTouchesEraser(stroke, p0, p1, ERASER_RADIUS)) {
+          removedHere += 1;
+        } else {
+          remaining.push(stroke);
+        }
+      }
+      if (removedHere === 0) return;
+
+      if (!eraseSessionSnapshotRef.current) {
+        eraseSessionSnapshotRef.current = prev;
+        const nextStack = [...undoStackRef.current.slice(-39), prev];
+        undoStackRef.current = nextStack;
+        setUndoStack(nextStack);
+      }
+
+      erasedCountRef.current += removedHere;
+      const nextDoc: DocumentSnapshot = {
+        ...prev,
+        strokes: remaining,
+      };
+      docRef.current = nextDoc;
+      setDoc(nextDoc);
+    },
+    [],
+  );
+
   // Initialize Meta Neural Band `emg-wrist` RelativeOrientationSensor
   useEffect(() => {
     const controller = new WristSensorController({
@@ -199,51 +417,137 @@ export default function App() {
       onReading: nextTelemetry => {
         const now = performance.now();
         telemetryStatusRef.current = nextTelemetry.status;
+        const activeMode = modeRef.current;
 
-        // Update active 3D wrist stroke at <= 30 Hz (33ms frame budget)
-        // Uses EMA-smoothed sensor deltas + virtual lazy-brush string (4px) to eliminate tremor jitter.
+        // 0) Rotary Character Dial scrubbing while holding Tip in COMPOSER mode
         if (
-          modeRef.current === 'DRAW_HOLD' &&
-          activeStrokeRef.current &&
+          activeMode === 'COMPOSER' &&
+          dialHoldingRef.current &&
+          now - lastDrawTickRef.current >= 33
+        ) {
+          lastDrawTickRef.current = now;
+          const rollDeg = nextTelemetry.rollDeg;
+          const absRoll = Math.abs(rollDeg);
+          const effectiveDeg =
+            absRoll <= 2.0 ? 0 : rollDeg > 0 ? rollDeg - 2.0 : rollDeg + 2.0;
+          const stepOffset = Math.round(effectiveDeg / 3.0);
+          const dialLen = DIAL_CHARS.length;
+
+          if (absRoll > 24 && now - lastDialGlideTickRef.current >= 95) {
+            lastDialGlideTickRef.current = now;
+            dialStartIdxRef.current =
+              (dialStartIdxRef.current + Math.sign(rollDeg) + dialLen) % dialLen;
+          }
+
+          const targetIdx =
+            (((dialStartIdxRef.current + stepOffset) % dialLen) + dialLen) % dialLen;
+          if (targetIdx !== dialIndexRef.current) {
+            dialIndexRef.current = targetIdx;
+            setDialIndex(targetIdx);
+          }
+        }
+
+        // 1) 1x Hold: disambiguate arm translation (DRAW_HOLD) vs forearm rotation (CURSOR_SCRUB)
+        if (
+          (activeMode === 'DRAW_HOLD' || activeMode === 'CURSOR_SCRUB') &&
+          now - lastDrawTickRef.current >= 33
+        ) {
+          lastDrawTickRef.current = now;
+          const rollDeg = nextTelemetry.rollDeg;
+          const absRoll = Math.abs(rollDeg);
+          const pointingPx = nextTelemetry.deltaPointing
+            ? Math.hypot(
+              nextTelemetry.deltaPointing.dx * 350,
+              nextTelemetry.deltaPointing.dy * 350,
+            )
+            : 0;
+
+          if (holdIntentRef.current === 'pending') {
+            if (absRoll >= 4.5 && pointingPx < Math.max(15, absRoll * 2.2)) {
+              holdIntentRef.current = 'scrub';
+              activeStrokeRef.current = null;
+              setActiveStroke(null);
+              modeRef.current = 'CURSOR_SCRUB';
+              setMode('CURSOR_SCRUB');
+            } else if (pointingPx >= 11) {
+              holdIntentRef.current = 'draw';
+            }
+          }
+
+          if (holdIntentRef.current === 'scrub' || modeRef.current === 'CURSOR_SCRUB') {
+            const effectiveDeg =
+              absRoll <= 2.5 ? 0 : rollDeg > 0 ? rollDeg - 2.5 : rollDeg + 2.5;
+            const charOffset = Math.round(effectiveDeg / 3.5);
+            const curDoc = docRef.current;
+            const activeLineText = curDoc.blocks[curDoc.cursor.lineIndex]?.text ?? '';
+            const maxCol = activeLineText.length;
+
+            if (absRoll > 24 && now - lastGlideTickRef.current >= 95) {
+              lastGlideTickRef.current = now;
+              scrubStartColRef.current = clamp(
+                scrubStartColRef.current + Math.sign(rollDeg),
+                0,
+                maxCol,
+              );
+            }
+
+            const targetCol = clamp(scrubStartColRef.current + charOffset, 0, maxCol);
+            if (targetCol !== curDoc.cursor.charIndex) {
+              const nextDoc: DocumentSnapshot = {
+                ...curDoc,
+                cursor: { ...curDoc.cursor, charIndex: targetCol },
+              };
+              docRef.current = nextDoc;
+              setDoc(nextDoc);
+            }
+          } else if (
+            holdIntentRef.current === 'draw' &&
+            activeStrokeRef.current &&
+            nextTelemetry.deltaPointing
+          ) {
+            const nextPos = stepLazyBrushTarget(
+              drawOriginRef.current,
+              penPosRef.current,
+              nextTelemetry.deltaPointing,
+              maxSheetHeight,
+            );
+            if (nextPos) {
+              const strokeWidth = PEN_WIDTHS[penWidthIdx];
+              penPosRef.current = nextPos;
+              setPenPos(nextPos);
+
+              const pts = activeStrokeRef.current.points;
+              const prevPt = pts[pts.length - 1];
+              if (!prevPt || Math.hypot(nextPos.x - prevPt.x, nextPos.y - prevPt.y) >= 3.0) {
+                const updated: InkStroke = {
+                  ...activeStrokeRef.current,
+                  points: [...pts, { x: nextPos.x, y: nextPos.y, width: strokeWidth }],
+                };
+                activeStrokeRef.current = updated;
+                setActiveStroke(updated);
+              }
+            }
+          }
+        }
+
+        // 2) 2x Tip Tap & Hold: Eraser via 3D wrist coordinates
+        if (
+          activeMode === 'ERASE_HOLD' &&
           nextTelemetry.deltaPointing &&
           now - lastDrawTickRef.current >= 33
         ) {
           lastDrawTickRef.current = now;
-          const sensitivity = 350;
-          const targetX = clamp(
-            drawOriginRef.current.x + nextTelemetry.deltaPointing.dx * sensitivity,
-            8,
-            LOGICAL_PAGE_WIDTH - 8,
-          );
-          const targetY = clamp(
-            drawOriginRef.current.y + nextTelemetry.deltaPointing.dy * sensitivity,
-            8,
-            maxSheetHeight - 8,
-          );
-
-          const STRING_RADIUS = 4.0;
           const curPen = penPosRef.current;
-          const pullDist = Math.hypot(targetX - curPen.x, targetY - curPen.y);
-
-          if (pullDist > STRING_RADIUS) {
-            const stepRatio = (pullDist - STRING_RADIUS) / pullDist;
-            const nextX = curPen.x + (targetX - curPen.x) * stepRatio;
-            const nextY = curPen.y + (targetY - curPen.y) * stepRatio;
-            const strokeWidth = PEN_WIDTHS[penWidthIdx];
-
-            penPosRef.current = { x: nextX, y: nextY };
-            setPenPos({ x: nextX, y: nextY });
-
-            const pts = activeStrokeRef.current.points;
-            const prevPt = pts[pts.length - 1];
-            if (!prevPt || Math.hypot(nextX - prevPt.x, nextY - prevPt.y) >= 3.0) {
-              const updated: InkStroke = {
-                ...activeStrokeRef.current,
-                points: [...pts, { x: nextX, y: nextY, width: strokeWidth }],
-              };
-              activeStrokeRef.current = updated;
-              setActiveStroke(updated);
-            }
+          const nextPos = stepLazyBrushTarget(
+            drawOriginRef.current,
+            curPen,
+            nextTelemetry.deltaPointing,
+            maxSheetHeight,
+          );
+          if (nextPos) {
+            penPosRef.current = nextPos;
+            setPenPos(nextPos);
+            eraseStrokesAt(curPen, nextPos);
           }
         }
 
@@ -275,72 +579,73 @@ export default function App() {
         window.clearTimeout(toastTimerRef.current);
       }
     };
-  }, [maxSheetHeight, penWidthIdx]);
+  }, [eraseStrokesAt, maxSheetHeight, penWidthIdx]);
 
-  const finalizeLiveTextSession = useCallback(() => {
-    const session = liveSessionRef.current;
-    if (session && session.appliedLength > 0) {
-      const nextStack = [...undoStackRef.current.slice(-39), session.preSessionSnapshot];
-      undoStackRef.current = nextStack;
-      setUndoStack(nextStack);
-      const insertedSnippet =
-        docRef.current.blocks[session.lineIndex]?.text.slice(
-          session.startCharIndex,
-          session.startCharIndex + session.appliedLength,
-        ) ?? '';
-      if (insertedSnippet) {
-        showToast(
-          `Inserted "${insertedSnippet.slice(0, 22)}${insertedSnippet.length > 22 ? '…' : ''}"`,
-        );
-      }
-    }
-    liveSessionRef.current = null;
-    setComposerDraft('');
-  }, [showToast]);
-
-  const handleLiveTextInput = useCallback((rawText: string) => {
-    const sanitized = rawText.replace(/\r?\n/g, ' ');
-    setComposerDraft(sanitized);
-
-    const prev = docRef.current;
-    if (!liveSessionRef.current) {
-      liveSessionRef.current = {
-        lineIndex: prev.cursor.lineIndex,
-        startCharIndex: prev.cursor.charIndex,
-        appliedLength: 0,
-        preSessionSnapshot: prev,
-      };
-    }
-
-    const session = liveSessionRef.current;
-    const target = prev.blocks[session.lineIndex];
-    if (!target) return;
-
-    const before = target.text.slice(0, session.startCharIndex);
-    const after = target.text.slice(session.startCharIndex + session.appliedLength);
-    const updatedBlock: DocBlock = {
-      ...target,
-      text: before + sanitized + after,
-    };
-    const blocks = [...prev.blocks];
-    blocks[session.lineIndex] = updatedBlock;
-    session.appliedLength = sanitized.length;
-
-    const nextDoc: DocumentSnapshot = {
-      ...prev,
-      blocks,
-      cursor: {
-        lineIndex: session.lineIndex,
-        charIndex: session.startCharIndex + sanitized.length,
-      },
-    };
-    docRef.current = nextDoc;
-    setDoc(nextDoc);
+  const recordRawInputEvent = useCallback((eventName: string, detail: string) => {
+    const stamp = new Date().toLocaleTimeString();
+    const entry = `[${stamp}] ${eventName}: ${detail}`;
+    setRawEventLog(prev => [entry, ...prev.slice(0, 7)]);
   }, []);
+
+  useEffect(() => {
+    const updateActive = () => setActiveElTag(describeActiveElement());
+    const onWinKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      recordRawInputEvent('keydown', `key="${e.key}" target=${describeElement(e.target)}`);
+    };
+    window.addEventListener('focusin', updateActive);
+    window.addEventListener('focusout', updateActive);
+    window.addEventListener('keydown', onWinKeyDown, true);
+    return () => {
+      window.removeEventListener('focusin', updateActive);
+      window.removeEventListener('focusout', updateActive);
+      window.removeEventListener('keydown', onWinKeyDown, true);
+    };
+  }, [recordRawInputEvent]);
+
+  const insertTextAtCursor = useCallback(
+    (rawText: string) => {
+      const sanitized = rawText.replace(/\r?\n/g, ' ');
+      if (sanitized.length === 0) return;
+      commitDocUpdate(prev => {
+        const { lineIndex, charIndex } = prev.cursor;
+        const target = prev.blocks[lineIndex];
+        if (!target) return prev;
+        const clampedCol = clamp(charIndex, 0, target.text.length);
+        const nextText =
+          target.text.slice(0, clampedCol) + sanitized + target.text.slice(clampedCol);
+        const blocks = [...prev.blocks];
+        blocks[lineIndex] = { ...target, text: nextText };
+        return {
+          ...prev,
+          blocks,
+          cursor: {
+            lineIndex,
+            charIndex: clampedCol + sanitized.length,
+          },
+        };
+      });
+    },
+    [commitDocUpdate],
+  );
+
+  const commitPendingDraftIfAny = useCallback(() => {
+    const el = composerInputRef.current;
+    const raw = (el?.value ?? '') || composerDraftRef.current;
+    if (el) {
+      el.value = '';
+    }
+    composerDraftRef.current = '';
+    setComposerDraft('');
+    if (raw.length > 0) {
+      insertTextAtCursor(raw);
+      showToast(`Inserted "${raw.slice(0, 20)}${raw.length > 20 ? '…' : ''}"`);
+    }
+  }, [insertTextAtCursor, showToast]);
 
   // Document editing operations
   const handleSwipeUp = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     setDoc(prev => {
       const nextLine = Math.max(0, prev.cursor.lineIndex - 1);
       if (nextLine === prev.cursor.lineIndex && scrollRef.current) {
@@ -356,10 +661,10 @@ export default function App() {
         },
       };
     });
-  }, [finalizeLiveTextSession]);
+  }, [commitPendingDraftIfAny]);
 
   const handleSwipeDown = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     setDoc(prev => {
       const nextLine = Math.min(prev.blocks.length - 1, prev.cursor.lineIndex + 1);
       if (nextLine === prev.cursor.lineIndex && scrollRef.current) {
@@ -375,10 +680,10 @@ export default function App() {
         },
       };
     });
-  }, [finalizeLiveTextSession]);
+  }, [commitPendingDraftIfAny]);
 
   const handleSwipeLeft = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     setDoc(prev => {
       const nextChar = Math.max(0, prev.cursor.charIndex - 1);
       if (nextChar === prev.cursor.charIndex) return prev;
@@ -387,10 +692,10 @@ export default function App() {
         cursor: { ...prev.cursor, charIndex: nextChar },
       };
     });
-  }, [finalizeLiveTextSession]);
+  }, [commitPendingDraftIfAny]);
 
   const handleSwipeRight = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     setDoc(prev => {
       const lineText = prev.blocks[prev.cursor.lineIndex]?.text ?? '';
       const nextChar = Math.min(lineText.length, prev.cursor.charIndex + 1);
@@ -400,10 +705,10 @@ export default function App() {
         cursor: { ...prev.cursor, charIndex: nextChar },
       };
     });
-  }, [finalizeLiveTextSession]);
+  }, [commitPendingDraftIfAny]);
 
   const insertNewLineAtCursor = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     commitDocUpdate(prev => {
       const { lineIndex, charIndex } = prev.cursor;
       const target = prev.blocks[lineIndex];
@@ -430,10 +735,10 @@ export default function App() {
       };
     });
     showToast('New line inserted');
-  }, [commitDocUpdate, finalizeLiveTextSession, showToast]);
+  }, [commitDocUpdate, commitPendingDraftIfAny, showToast]);
 
   const backspaceAtCursor = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     commitDocUpdate(prev => {
       const { lineIndex, charIndex } = prev.cursor;
       const target = prev.blocks[lineIndex];
@@ -471,10 +776,59 @@ export default function App() {
 
       return prev;
     });
-  }, [commitDocUpdate, finalizeLiveTextSession]);
+  }, [commitDocUpdate, commitPendingDraftIfAny]);
+
+  const insertDialChar = useCallback(
+    (char: string, applyCase = true) => {
+      if (char === '⌫') {
+        backspaceAtCursor();
+        return;
+      }
+      const out =
+        applyCase && uppercaseDial && /^[a-z]$/.test(char) ? char.toUpperCase() : char;
+      insertTextAtCursor(out);
+    },
+    [backspaceAtCursor, insertTextAtCursor, uppercaseDial],
+  );
+
+  const completeWordAtCursor = useCallback(
+    (word: string) => {
+      commitDocUpdate(prev => {
+        const { lineIndex, charIndex } = prev.cursor;
+        const target = prev.blocks[lineIndex];
+        if (!target) return prev;
+        const clampedCol = clamp(charIndex, 0, target.text.length);
+        const prefix = getActiveWordPrefix(target.text, clampedCol);
+        const matchesPrefix =
+          prefix.length > 0 && word.toLowerCase().startsWith(prefix.toLowerCase());
+        const replaceStart = matchesPrefix ? clampedCol - prefix.length : clampedCol;
+        let finalWord = word;
+        if (matchesPrefix && prefix[0] === prefix[0].toUpperCase()) {
+          finalWord = word[0].toUpperCase() + word.slice(1);
+        } else if (uppercaseDial) {
+          finalWord = word[0].toUpperCase() + word.slice(1);
+        }
+        const insertion = `${finalWord} `;
+        const nextText =
+          target.text.slice(0, replaceStart) + insertion + target.text.slice(clampedCol);
+        const blocks = [...prev.blocks];
+        blocks[lineIndex] = { ...target, text: nextText };
+        return {
+          ...prev,
+          blocks,
+          cursor: {
+            lineIndex,
+            charIndex: replaceStart + insertion.length,
+          },
+        };
+      });
+      showToast(`Word "${word}"`);
+    },
+    [commitDocUpdate, showToast, uppercaseDial],
+  );
 
   const handleUndo = useCallback(() => {
-    finalizeLiveTextSession();
+    commitPendingDraftIfAny();
     const stack = undoStackRef.current;
     if (stack.length === 0) {
       showToast('Nothing to undo');
@@ -487,24 +841,37 @@ export default function App() {
     docRef.current = last;
     setDoc(last);
     showToast('Reverted last stroke / edit');
-  }, [finalizeLiveTextSession, showToast]);
+  }, [commitPendingDraftIfAny, showToast]);
 
-  // 3D Wrist & Pointer Drawing Hold Handlers
+  // 3D Wrist & Pointer Drawing / Cursor-Zoom / Eraser Hold Handlers
   const startWristDrawHold = useCallback(
     (pointerStart?: { x: number; y: number }) => {
-      finalizeLiveTextSession();
+      commitPendingDraftIfAny();
       if (modeRef.current === 'COMPOSER') {
+        composerRowRef.current = 'dial';
+        setComposerRow('dial');
         composerInputRef.current?.blur();
+        dialHoldingRef.current = true;
+        dialStartIdxRef.current = dialIndexRef.current;
+        lastDialGlideTickRef.current = 0;
+        sensorRef.current?.captureReference();
+        showToast('Rotate arm ◀▶ to spin character dial');
+        return;
       }
       sensorRef.current?.captureReference();
 
       const usePointerOrigin = Boolean(pointerStart && telemetryStatusRef.current !== 'live');
-      const origin = usePointerOrigin && pointerStart
-        ? pointerStart
-        : {
+      const origin =
+        usePointerOrigin && pointerStart
+          ? pointerStart
+          : {
             x: penPosRef.current.x,
             y: clamp(88 + docRef.current.cursor.lineIndex * 36, 40, maxSheetHeight - 40),
           };
+
+      holdIntentRef.current = usePointerOrigin ? 'draw' : 'pending';
+      scrubStartColRef.current = docRef.current.cursor.charIndex;
+      lastGlideTickRef.current = 0;
 
       drawOriginRef.current = origin;
       penPosRef.current = origin;
@@ -521,7 +888,7 @@ export default function App() {
       setMode('DRAW_HOLD');
       modeRef.current = 'DRAW_HOLD';
     },
-    [finalizeLiveTextSession, maxSheetHeight, penColorIdx, penWidthIdx],
+    [commitPendingDraftIfAny, maxSheetHeight, penColorIdx, penWidthIdx, showToast],
   );
 
   const handleHoldMove = useCallback(
@@ -550,12 +917,33 @@ export default function App() {
   );
 
   const finishWristDrawHold = useCallback(() => {
+    if (dialHoldingRef.current) {
+      const moved = dialIndexRef.current !== dialStartIdxRef.current;
+      dialHoldingRef.current = false;
+      sensorRef.current?.clearReference();
+      if (moved) {
+        const chosen = DIAL_CHARS[dialIndexRef.current];
+        if (chosen) {
+          insertDialChar(chosen);
+          logGesture('Dial Rotate Release', `Inserted "${chosen === ' ' ? 'Space' : chosen}"`);
+        }
+      }
+      return;
+    }
+
+    const intent = holdIntentRef.current;
+    holdIntentRef.current = 'pending';
     const stroke = activeStrokeRef.current;
     activeStrokeRef.current = null;
     setActiveStroke(null);
     sensorRef.current?.clearReference();
     setMode('DOCUMENT');
     modeRef.current = 'DOCUMENT';
+
+    if (intent === 'scrub') {
+      showToast(`Cursor at Col ${docRef.current.cursor.charIndex + 1}`);
+      return;
+    }
 
     if (stroke && stroke.points.length >= 2) {
       commitDocUpdate(prev => ({
@@ -564,7 +952,68 @@ export default function App() {
       }));
       showToast(`Ink stroke saved (${stroke.points.length} pts)`);
     }
-  }, [commitDocUpdate, showToast]);
+  }, [commitDocUpdate, insertDialChar, logGesture, showToast]);
+
+  const startWristEraseHold = useCallback(
+    (pointerStart?: { x: number; y: number }) => {
+      commitPendingDraftIfAny();
+      dialHoldingRef.current = false;
+      if (modeRef.current === 'COMPOSER') {
+        composerInputRef.current?.blur();
+      }
+      sensorRef.current?.captureReference();
+
+      const usePointerOrigin = Boolean(pointerStart && telemetryStatusRef.current !== 'live');
+      const origin =
+        usePointerOrigin && pointerStart
+          ? pointerStart
+          : {
+            x: penPosRef.current.x,
+            y: clamp(88 + docRef.current.cursor.lineIndex * 36, 40, maxSheetHeight - 40),
+          };
+
+      drawOriginRef.current = origin;
+      penPosRef.current = origin;
+      setPenPos(origin);
+      eraseSessionSnapshotRef.current = null;
+      erasedCountRef.current = 0;
+      setMode('ERASE_HOLD');
+      modeRef.current = 'ERASE_HOLD';
+      eraseStrokesAt(origin, origin);
+    },
+    [eraseStrokesAt, finalizeLiveTextSession, maxSheetHeight],
+  );
+
+  const handleEraseHoldMove = useCallback(
+    (x: number, y: number) => {
+      if (telemetryStatusRef.current === 'live') return;
+      if (modeRef.current !== 'ERASE_HOLD') return;
+      const now = performance.now();
+      if (now - lastDrawTickRef.current < 16) return;
+      lastDrawTickRef.current = now;
+
+      const prevPen = penPosRef.current;
+      const nextPos = { x, y };
+      penPosRef.current = nextPos;
+      setPenPos(nextPos);
+      eraseStrokesAt(prevPen, nextPos);
+    },
+    [eraseStrokesAt],
+  );
+
+  const finishWristEraseHold = useCallback(() => {
+    const count = erasedCountRef.current;
+    eraseSessionSnapshotRef.current = null;
+    erasedCountRef.current = 0;
+    sensorRef.current?.clearReference();
+    setMode('DOCUMENT');
+    modeRef.current = 'DOCUMENT';
+    if (count > 0) {
+      showToast(`Erased ${count} line${count === 1 ? '' : 's'}`);
+    } else {
+      showToast('Eraser released');
+    }
+  }, [showToast]);
 
   // Toolbar Actions: Left/Right switches category, Up/Down cycles options or toggles binary state
   const stepBlockKind = useCallback(
@@ -628,6 +1077,102 @@ export default function App() {
 
   const activeBlock = doc.blocks[doc.cursor.lineIndex];
   const activeStyleIdx = Math.max(0, BLOCK_KINDS.indexOf(activeBlock?.kind ?? 'p'));
+
+  const activeWordPrefix = useMemo(
+    () => getActiveWordPrefix(activeBlock?.text ?? '', doc.cursor.charIndex),
+    [activeBlock?.text, doc.cursor.charIndex],
+  );
+
+  const suggestedWords = useMemo(() => {
+    const prefixLower = activeWordPrefix.toLowerCase();
+    if (!prefixLower) {
+      return COMMON_WORDS.slice(0, 6);
+    }
+    const matches = COMMON_WORDS.filter(
+      w => w.startsWith(prefixLower) && w !== prefixLower,
+    );
+    return (matches.length > 0 ? matches : COMMON_WORDS).slice(0, 6);
+  }, [activeWordPrefix]);
+
+  useEffect(() => {
+    setWordIndex(0);
+  }, [activeWordPrefix]);
+
+  const safeWordIndex =
+    suggestedWords.length > 0 ? clamp(wordIndex, 0, suggestedWords.length - 1) : 0;
+
+  const composerPreview = useMemo(() => {
+    if (mode !== 'COMPOSER') return null;
+    if (composerDraft.length > 0) return composerDraft;
+    if (composerRow === 'words') {
+      const w = suggestedWords[safeWordIndex];
+      return w ? `[${w}]` : null;
+    }
+    if (composerRow === 'dial') {
+      const ch = DIAL_CHARS[dialIndex];
+      if (!ch) return null;
+      if (ch === ' ') return '[␣]';
+      if (ch === '⌫') return '[⌫]';
+      const display = uppercaseDial && /^[a-z]$/.test(ch) ? ch.toUpperCase() : ch;
+      return `[${display}]`;
+    }
+    return null;
+  }, [composerDraft, composerRow, dialIndex, mode, safeWordIndex, suggestedWords, uppercaseDial]);
+
+  const capabilityReport: InputCapabilityReport = useMemo(() => {
+    const win = window as unknown as Record<string, unknown>;
+    const nav = navigator as unknown as Record<string, unknown>;
+    return {
+      emgWristStatus: telemetry.status,
+      activeElementTag: activeElTag,
+      hasInputEvents: typeof InputEvent !== 'undefined',
+      hasCompositionEvents: typeof CompositionEvent !== 'undefined',
+      hasVirtualKeyboard: 'virtualKeyboard' in nav,
+      hasSpeechRecognition: Boolean(win.SpeechRecognition || win.webkitSpeechRecognition),
+      lastRawEvents: rawEventLog,
+    };
+  }, [activeElTag, rawEventLog, telemetry.status]);
+
+  const handleComposerNavigate = useCallback(
+    (dir: 'up' | 'down' | 'left' | 'right') => {
+      if (dir === 'up' || dir === 'down') {
+        const curIdx = COMPOSER_ROWS.indexOf(composerRowRef.current);
+        const nextIdx = clamp(curIdx + (dir === 'down' ? 1 : -1), 0, COMPOSER_ROWS.length - 1);
+        const nextRow = COMPOSER_ROWS[nextIdx];
+        composerRowRef.current = nextRow;
+        setComposerRow(nextRow);
+        if (nextRow === 'native') {
+          composerInputRef.current?.focus();
+          showToast('Native OS Input row focused');
+        } else {
+          composerInputRef.current?.blur();
+        }
+        return;
+      }
+
+      const delta = dir === 'right' ? 1 : -1;
+      if (composerRowRef.current === 'words') {
+        const len = Math.max(1, suggestedWords.length);
+        setWordIndex(idx => (idx + delta + len) % len);
+        return;
+      }
+
+      if (composerRowRef.current === 'native') {
+        if (delta < 0) {
+          handleSwipeLeft();
+        } else {
+          handleSwipeRight();
+        }
+        return;
+      }
+
+      const len = DIAL_CHARS.length;
+      const nextDialIdx = (dialIndexRef.current + delta + len) % len;
+      dialIndexRef.current = nextDialIdx;
+      setDialIndex(nextDialIdx);
+    },
+    [handleSwipeLeft, handleSwipeRight, showToast, suggestedWords.length],
+  );
 
   const toolbarActions = useMemo(
     () => [
@@ -811,26 +1356,62 @@ export default function App() {
     onSwipeLeft: handleSwipeLeft,
     onSwipeRight: handleSwipeRight,
     onTipSingleTap: () => {
+      if (modeRef.current === 'COMPOSER') {
+        const row = composerRowRef.current;
+        if (row === 'words') {
+          const word = suggestedWords[safeWordIndex];
+          if (word) {
+            completeWordAtCursor(word);
+          }
+        } else if (row === 'dial') {
+          const chosen = DIAL_CHARS[dialIndexRef.current];
+          if (chosen) {
+            insertDialChar(chosen);
+          }
+        } else {
+          const el = composerInputRef.current;
+          el?.focus();
+          el?.click();
+          showToast('Native input focused — use OS Composer or ↑ for Dial');
+        }
+        return;
+      }
       setMode('COMPOSER');
-      composerInputRef.current?.focus();
-      showToast('Write ready — tap Tip again to write');
+      modeRef.current = 'COMPOSER';
+      if (composerRowRef.current === 'native') {
+        composerInputRef.current?.focus();
+      } else {
+        composerInputRef.current?.blur();
+      }
+      showToast('Write mode — 1x Hold+Rotate or ←→ + 1x Tap');
     },
-    onTipDoubleTap: insertNewLineAtCursor,
+    onTipDoubleTap: () => {
+      if (modeRef.current === 'COMPOSER') {
+        insertTextAtCursor(' ');
+        showToast('Inserted Space');
+        return;
+      }
+      insertNewLineAtCursor();
+    },
     onTipTripleTap: () => {
-      finalizeLiveTextSession();
+      commitPendingDraftIfAny();
       composerInputRef.current?.blur();
       setMode(curr => (curr === 'TOOLBAR' ? 'DOCUMENT' : 'TOOLBAR'));
     },
     onTipHoldStart: startWristDrawHold,
     onTipHoldMove: handleHoldMove,
     onTipHoldEnd: finishWristDrawHold,
+    onTipDoubleHoldStart: startWristEraseHold,
+    onTipDoubleHoldMove: handleEraseHoldMove,
+    onTipDoubleHoldEnd: finishWristEraseHold,
     onSideSingleTap: () => {
       if (mode === 'TOOLBAR') {
         setMode('DOCUMENT');
         return;
       }
       if (mode === 'COMPOSER') {
-        finalizeLiveTextSession();
+        commitPendingDraftIfAny();
+        dialHoldingRef.current = false;
         setMode('DOCUMENT');
         composerInputRef.current?.blur();
         return;
@@ -838,6 +1419,7 @@ export default function App() {
       backspaceAtCursor();
     },
     onSideDoubleTap: handleUndo,
+    onComposerNavigate: handleComposerNavigate,
     onToolbarNavigate: dir => {
       const len = toolbarActions.length;
       if (dir === 'left') {
@@ -876,12 +1458,20 @@ export default function App() {
           onToggleEmulatorPanel={() => setShowEmulatorPanel(v => !v)}
           onSimulatedPose={handleSimulatedPose}
           onStartHoldDrawSim={() => {
-            logGesture('Sim Tip Hold', '3D Wrist Draw active');
+            logGesture('Sim 1x Hold', 'Draw / Rotate Arm Cursor');
             startWristDrawHold();
           }}
           onEndHoldDrawSim={() => {
-            logGesture('Sim Tip Release', 'Stroke committed');
+            logGesture('Sim 1x Release', 'Draw / scrub finished');
             finishWristDrawHold();
+          }}
+          onStartHoldEraseSim={() => {
+            logGesture('Sim 2x Hold', 'Eraser active');
+            startWristEraseHold();
+          }}
+          onEndHoldEraseSim={() => {
+            logGesture('Sim 2x Release', 'Eraser finished');
+            finishWristEraseHold();
           }}
           onSimSwipe={dir => {
             if (mode === 'TOOLBAR') {
@@ -899,6 +1489,11 @@ export default function App() {
                 logGesture('Swipe DOWN', 'Next option / toggle');
                 toolbarActions[toolbarIndex]?.onStep(1);
               }
+              return;
+            }
+            if (mode === 'COMPOSER') {
+              logGesture('Sim Swipe', `Composer ${dir.toUpperCase()}`);
+              handleComposerNavigate(dir);
               return;
             }
             if (dir === 'up') {
@@ -928,10 +1523,12 @@ export default function App() {
           activeStroke={activeStroke}
           penPos={penPos}
           penColor={currentColor}
+          rollDeg={telemetry.rollDeg}
+          composerPreview={composerPreview}
           mode={mode}
           scrollRef={scrollRef}
           onSelectLine={(lineIndex, charIndex) => {
-            finalizeLiveTextSession();
+            commitPendingDraftIfAny();
             setDoc(prev => ({
               ...prev,
               cursor: {
@@ -947,28 +1544,65 @@ export default function App() {
         />
 
         <NeuralComposer
-          draft={composerDraft}
           mode={mode}
-          canUndo={undoStack.length > 0}
+          draftText={composerDraft}
           inputRef={composerInputRef}
-          onLiveTextInput={handleLiveTextInput}
-          onFinalizeSession={() => {
-            finalizeLiveTextSession();
-            setMode('DOCUMENT');
-            composerInputRef.current?.blur();
+          composerRow={composerRow}
+          dialChars={DIAL_CHARS}
+          dialIndex={dialIndex}
+          uppercaseDial={uppercaseDial}
+          suggestedWords={suggestedWords}
+          wordIndex={safeWordIndex}
+          capabilityReport={capabilityReport}
+          showProbe={showProbe}
+          onToggleProbe={() => setShowProbe(v => !v)}
+          onSelectRow={row => {
+            composerRowRef.current = row;
+            setComposerRow(row);
+            if (row === 'native') {
+              composerInputRef.current?.focus();
+            } else {
+              composerInputRef.current?.blur();
+            }
           }}
-          onFocusComposer={() => setMode('COMPOSER')}
-          onExitComposer={() => {
-            finalizeLiveTextSession();
-            setMode('DOCUMENT');
-            composerInputRef.current?.blur();
+          onSelectWord={idx => setWordIndex(idx)}
+          onCommitWord={word => completeWordAtCursor(word)}
+          onSelectDialIndex={idx => {
+            dialIndexRef.current = idx;
+            setDialIndex(idx);
           }}
+          onInsertDialChar={char => insertDialChar(char)}
+          onToggleCase={() => setUppercaseDial(v => !v)}
+          onDraftChange={value => {
+            composerDraftRef.current = value;
+            setComposerDraft(value);
+          }}
+          onCommitText={text => {
+            insertTextAtCursor(text);
+            showToast(`Committed "${text.slice(0, 20)}${text.length > 20 ? '…' : ''}"`);
+          }}
+          onBackspace={backspaceAtCursor}
           onUndo={handleUndo}
-          onToggleToolbar={() => {
-            finalizeLiveTextSession();
+          onRequestWriteMode={() => {
+            setMode('COMPOSER');
+            modeRef.current = 'COMPOSER';
+            if (composerRowRef.current === 'native') {
+              composerInputRef.current?.focus();
+            }
+          }}
+          onExitComposer={() => {
+            commitPendingDraftIfAny();
+            dialHoldingRef.current = false;
+            setMode('DOCUMENT');
+            modeRef.current = 'DOCUMENT';
+            composerInputRef.current?.blur();
+          }}
+          onOpenToolbar={() => {
+            commitPendingDraftIfAny();
             composerInputRef.current?.blur();
             setMode(curr => (curr === 'TOOLBAR' ? 'DOCUMENT' : 'TOOLBAR'));
           }}
+          onRecordRawInputEvent={recordRawInputEvent}
         />
 
         <section className="toolbar-zone" aria-label="Word formatting and drawing toolbar">
@@ -981,9 +1615,8 @@ export default function App() {
                     key={opt}
                     type="button"
                     tabIndex={-1}
-                    className={`option-chip ${
-                      selectedToolbarItem.activeOptionIndex === optIdx ? 'is-active-option' : ''
-                    }`}
+                    className={`option-chip ${selectedToolbarItem.activeOptionIndex === optIdx ? 'is-active-option' : ''
+                      }`}
                     onClick={() => selectedToolbarItem.onSelectOption(optIdx)}
                   >
                     {opt}
@@ -1001,9 +1634,8 @@ export default function App() {
                   toolbarBtnRefs.current[idx] = el;
                 }}
                 type="button"
-                className={`toolbar-pill ${
-                  mode === 'TOOLBAR' && toolbarIndex === idx ? 'is-selected' : ''
-                }`}
+                className={`toolbar-pill ${mode === 'TOOLBAR' && toolbarIndex === idx ? 'is-selected' : ''
+                  }`}
                 onClick={() => {
                   setToolbarIndex(idx);
                   action.onStep(1);
@@ -1030,14 +1662,21 @@ export default function App() {
               <span>1x Tip Apply</span>
               <span>Side / 3x Tip Exit</span>
             </>
+          ) : mode === 'COMPOSER' ? (
+            <>
+              <span>↑↓ Words/Dial/Native</span>
+              <span>←→ / 1xHold+Rotate Pick</span>
+              <span>1x Tip Insert</span>
+              <span>2x Tip Space</span>
+              <span>Side / Esc Done</span>
+            </>
           ) : (
             <>
               <span>↑↓ Scroll</span>
-              <span>←→ Cursor</span>
-              <span>1x Tip Write</span>
-              <span>2x Tip Line</span>
+              <span>←→ / Hold+Rotate Cursor</span>
+              <span>1x Hold Draw</span>
+              <span>2x Hold Erase</span>
               <span>3x Tip Menu</span>
-              <span>Hold Tip + Wrist Draw</span>
               <span>Side Del / 2x Undo</span>
             </>
           )}
