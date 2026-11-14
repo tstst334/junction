@@ -2,3 +2,8 @@
 junction-dataset/
 
 *.zip
+
+.gradle/
+build/
+**/build/
+local.properties
